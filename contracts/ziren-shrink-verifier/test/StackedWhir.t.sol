@@ -129,10 +129,7 @@ contract WhirComponentHarness {
 
     function check(bytes memory encoded, uint256 mutation) public pure returns (bool) {
         Fixture memory a = decode(encoded);
-        if (mutation == 1) a.proof.roundPolys[0][0][0] = F.add(a.proof.roundPolys[0][0][0], 1);
-        if (mutation == 2) a.proof.openings[0][0].values[0][0] = (a.proof.openings[0][0].values[0][0] + 1) % F.P;
-        if (mutation == 3) a.digest = bytes32(uint256(a.digest) ^ 1);
-        if (mutation >= 4) {
+        if (mutation == 4 || mutation == 5) {
             for (uint256 r; r < a.proof.openings.length; ++r) {
                 for (uint256 j; j < a.proof.openings[r].length; ++j) {
                     W.Leaf memory leaf = a.proof.openings[r][j];
@@ -151,10 +148,91 @@ contract WhirComponentHarness {
                 }
             }
             if (mutation == 5) a.proof.openings[0][0].width += 1;
+        } else if (mutation != 0) {
+            mutate(a, mutation);
         }
         T.State memory t = T.resume(a.digest, a.buffered, a.wordsLeft);
         W.verify(a.proof, a.config, a.roots, a.stripes, a.point, t);
         return true;
+    }
+
+    /// Every mutation here must be rejected by W.verify: prover messages,
+    /// Merkle paths, grinding witnesses, incoming claims, sum-preserving
+    /// sumcheck tampering, swapped openings and noncanonical leaf values.
+    /// Changing only the resumed transcript's wordsLeft is deliberately not
+    /// listed: the first absorb resets it, exactly as the Rust challenger does.
+    function mutate(Fixture memory a, uint256 mutation) private pure {
+        if (mutation <= 13 && mutation != 3) mutateMessages(a.proof, mutation);
+        else if (mutation <= 21) mutateClaims(a, mutation);
+        else mutateShapes(a, mutation);
+    }
+
+    function mutateMessages(W.Proof memory p, uint256 mutation) private pure {
+        if (mutation == 1) p.roundPolys[0][0][0] = F.add(p.roundPolys[0][0][0], 1);
+        if (mutation == 2) p.openings[0][0].values[0][0] = (p.openings[0][0].values[0][0] + 1) % F.P;
+        if (mutation == 6) p.finalPoly[0] = F.add(p.finalPoly[0], 1);
+        if (mutation == 7) p.openings[0][0].path[0] = bytes32(uint256(p.openings[0][0].path[0]) ^ 1);
+        if (mutation == 8) p.roundOod[0][0] = F.add(p.roundOod[0][0], 1);
+        if (mutation == 9) p.foldPow[0] = (p.foldPow[0] + 1) % F.P;
+        if (mutation == 10) p.roots[0] = bytes32(uint256(p.roots[0]) ^ 1);
+        if (mutation == 11) p.finalPow = (p.finalPow + 1) % F.P;
+        if (mutation == 12) p.finalPolys[0][0] = F.add(p.finalPolys[0][0], 1);
+        if (mutation == 13) p.batch[0][0] = F.add(p.batch[0][0], 1);
+    }
+
+    function mutateClaims(Fixture memory a, uint256 mutation) private pure {
+        if (mutation == 3) a.digest = bytes32(uint256(a.digest) ^ 1);
+        if (mutation == 14) {
+            W.Leaf memory last = a.proof.openings[a.proof.openings.length - 1][0];
+            last.values[0][0] = (last.values[0][0] + 1) % F.P;
+        }
+        if (mutation == 15) swapLeaves(a.proof.openings[0]);
+        if (mutation == 16) a.point[0] = F.add(a.point[0], 1);
+        if (mutation == 17) a.proof.openings[0][0].values[0][0] = F.P;
+        if (mutation == 18) {
+            // Keeps p(0) + p(1) unchanged, so only the running claim can catch it.
+            uint256[] memory q = a.proof.roundPolys[0][0];
+            q[0] = F.add(q[0], 1);
+            q[1] = F.sub(q[1], 2);
+        }
+        if (mutation == 19) a.proof.batchPow = (a.proof.batchPow + 1) % F.P;
+        if (mutation == 20) {
+            uint256 swapped = a.proof.roundOod[0][0];
+            a.proof.roundOod[0][0] = a.proof.roundOod[0][1];
+            a.proof.roundOod[0][1] = swapped;
+        }
+        if (mutation == 21) a.stripes[0] += 1;
+    }
+
+    function mutateShapes(Fixture memory a, uint256 mutation) private pure {
+        if (mutation == 22) {
+            bytes32[] memory path = a.proof.openings[1][0].path;
+            path[path.length - 1] = bytes32(uint256(path[path.length - 1]) ^ 1);
+        }
+        if (mutation == 23) {
+            uint256 last = a.proof.finalPoly.length - 1;
+            a.proof.finalPoly[last] = F.add(a.proof.finalPoly[last], 1);
+        }
+        if (mutation == 24) a.proof.openings[0][1].values[0][0] = (a.proof.openings[0][1].values[0][0] + 1) % F.P;
+        if (mutation == 25) a.roots[0] = bytes32(uint256(a.roots[0]) ^ 1);
+        if (mutation == 26) {
+            uint256[] memory q = a.proof.finalPolys[a.proof.finalPolys.length - 1];
+            q[0] = F.add(q[0], 1);
+            q[2] = F.sub(q[2], 2);
+        }
+        if (mutation == 27) swapLeaves(a.proof.openings[1]);
+        if (mutation == 28) a.proof.openings[0][0].values[0][0] |= 1 << 128;
+        if (mutation == 29) {
+            uint256 last = a.proof.foldPow.length - 1;
+            a.proof.foldPow[last] = (a.proof.foldPow[last] + 1) % F.P;
+        }
+        if (mutation > 29) revert("unknown mutation");
+    }
+
+    function swapLeaves(W.Leaf[] memory round) private pure {
+        W.Leaf memory swapped = round[0];
+        round[0] = round[1];
+        round[1] = swapped;
     }
 }
 
@@ -173,7 +251,8 @@ contract StackedWhirTest {
         uint256 before = gasleft();
         require(h.check(encoded, 0));
         emit ComponentGas(before - gasleft(), encoded.length);
-        for (uint256 i = 1; i <= 3; ++i) {
+        for (uint256 i = 1; i <= 29; ++i) {
+            if (i == 4 || i == 5) continue;
             (bool ok, bytes memory error) = address(h).staticcall(abi.encodeCall(h.check, (encoded, i)));
             require(!ok && error.length > 0, "altered component accepted or OOG");
         }

@@ -11,6 +11,7 @@ use zkm_pcs::{
 };
 use zkm_primitives::io::ZKMPublicValues;
 use zkm_prover::{components::DefaultProverComponents, ZKMProver};
+use zkop_shrink_export::wire::{Mode, Profile};
 
 #[test]
 #[ignore = "full production core/compress/shrink proving and key-admission gate"]
@@ -85,6 +86,42 @@ fn fibonacci_compact_shrink() -> anyhow::Result<()> {
     assert!(prover
         .verify_shrink_with::<CompactShrink<Keccak256Suite>>(
             &malformed,
+            &vk,
+            &trusted,
+            &public_values
+        )
+        .is_err());
+
+    // Transport codec against the real geometry: exactly one packet encodes
+    // the proof, every header/shape rejection path fires, and a packet that
+    // decodes with one changed field still fails native verification.
+    let profile = Profile::from_trusted_proof(&terminal.vk, &terminal.proof, Mode::Raw, false)?;
+    let packet = profile.encode(&terminal.proof)?;
+    let decoded = profile.decode(&packet)?;
+    assert_eq!(profile.encode(&decoded)?, packet);
+    let rejected = |label: &str, edit: &dyn Fn(&mut Vec<u8>)| {
+        let mut bad = packet.clone();
+        edit(&mut bad);
+        assert!(profile.decode(&bad).is_err(), "{label} accepted");
+    };
+    rejected("wrong mode byte", &|p| p[5] = Mode::Shared as u8);
+    rejected("wrong profile id", &|p| p[6] ^= 1);
+    rejected("trailing byte", &|p| p.push(0));
+    rejected("truncated packet", &|p| {
+        p.pop();
+    });
+    rejected("noncanonical field", &|p| {
+        p[38..42].copy_from_slice(&0x7f00_0001u32.to_le_bytes())
+    });
+    let mut altered = packet.clone();
+    let value = u32::from_le_bytes(altered[38..42].try_into().unwrap());
+    let value = if value == 0 { 1 } else { value - 1 };
+    altered[38..42].copy_from_slice(&value.to_le_bytes());
+    let mut tampered = terminal.clone();
+    tampered.proof = profile.decode(&altered)?;
+    assert!(prover
+        .verify_shrink_with::<CompactShrink<Keccak256Suite>>(
+            &tampered,
             &vk,
             &trusted,
             &public_values

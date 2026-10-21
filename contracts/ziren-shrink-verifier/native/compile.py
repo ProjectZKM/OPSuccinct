@@ -1631,6 +1631,11 @@ class Compiler:
         if self.meta.get('suite', 'keccak256-v1') != 'keccak256-v1':
             raise ValueError('native Solidity backend supports only the Keccak256 compact suite')
         self.ops = manifest['ops']
+        # The approved program must bind every byte of the expected output
+        # digest before the WHIR tail; the reference interpreter enforces the
+        # same gate at run time.
+        bound={op[3] for op in self.ops if op[0]==17}
+        assert bound==set(range(32)),('program does not bind all 32 output digest bytes',sorted(bound))
         self.registers = manifest['registers']
         assert self.registers>0 and 256+32*self.registers+320<=0xa000,'native workspace overlaps Poseidon scratch'
         self.prefix = self.registers*32+288+32

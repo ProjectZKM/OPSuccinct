@@ -16,6 +16,7 @@ contract KeccakTerminalVerifier {
     error InvalidProgram();
     error InvalidPacket();
     error AssertionFailed(uint256 pc, uint256 actual, uint256 expected);
+    error IncompleteOutputBinding(uint256 bound);
 
     struct Reader {
         bytes data;
@@ -28,6 +29,10 @@ contract KeccakTerminalVerifier {
         uint256 hashes;
         uint256[] regs;
         bytes32 outputDigest;
+        // Bit i is set once op 17 has asserted byte i of outputDigest. The
+        // WHIR tail is only entered after all 32 bytes are bound, so a program
+        // cannot accept a proof without checking the complete statement.
+        uint256 bound;
     }
 
     constructor(bytes32 approvedProgramHash) {
@@ -322,6 +327,7 @@ contract KeccakTerminalVerifier {
             uint256 pc = r.at;
             uint256 op = n(r, 1);
             if (op == 255) {
+                if (e.bound != type(uint32).max) revert IncompleteOutputBinding(e.bound);
                 whir(r, e, t);
                 return true;
             }
@@ -378,6 +384,7 @@ contract KeccakTerminalVerifier {
                 if (value != uint8(expectedOutputDigest[index])) {
                     revert AssertionFailed(pc, value, uint8(expectedOutputDigest[index]));
                 }
+                e.bound |= 1 << index;
             } else {
                 revert InvalidProgram();
             }

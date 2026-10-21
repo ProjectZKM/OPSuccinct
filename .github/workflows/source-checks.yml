@@ -38,3 +38,17 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --locked -p zkop-shrink-export --lib
       - run: cargo check --locked -p zkop-shrink-export --features machine --tests
+
+  solidity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+      - name: Build verifier contracts
+        run: forge build --root contracts/ziren-shrink-verifier
+      - name: Fixture-free Foundry tests
+        run: >-
+          forge test --root contracts/ziren-shrink-verifier
+          --no-match-contract 'KeccakTerminalVerifierTest|OptimizedKernelsTest|KeccakWireReaderTest|StackedWhirTest'

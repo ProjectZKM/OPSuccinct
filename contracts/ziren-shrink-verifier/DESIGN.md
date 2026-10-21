@@ -34,6 +34,21 @@ the complete WHIR tail: commitments, Merkle paths, grinding, sumchecks, OOD
 relations and final polynomial identities. Transport or arithmetic helpers do
 not independently establish proof validity.
 
+The reference interpreter refuses to enter the WHIR tail until op 17 has
+bound all 32 output-digest bytes, and the native compiler asserts the same of
+the approved program at build time; the program hash is not the only guard.
+
+The native outer verifier's jagged-eval sumcheck is replayed into the
+transcript only. Its closing identity is computed directly from the opened
+values, so those coefficients are transcript inputs rather than checked
+relations; re-rolling them still requires clearing the WHIR proof-of-work.
+
+Transport is not canonical on chain. The native entry accepts raw and
+dictionary-encoded packets under one profile and never reads some schema
+slots, while the Rust decoder accepts exactly one packet per proof.
+Verification is over decoded values; key replay protection on the statement,
+never on a packet hash.
+
 Kernel, WHIR, math and constructor-created helper code is pinned. Calls use
 `STATICCALL`; frame bounds restrict register updates and prevent replacing proof
 bytes or the expected statement. Partial installation does not authorize proof

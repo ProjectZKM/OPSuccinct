@@ -170,12 +170,14 @@ pub fn export(
     {
         let main = chip.air.width();
         let prep = MachineAir::preprocessed_width(&chip.air);
+        // Exported lookups carry no scope and the native folder evaluates every
+        // bus locally, so a chip with any global-scope lookup must not export.
         assert!(
             chip.sends
                 .iter()
                 .chain(&chip.receives)
-                .any(|l| l.scope == LookupScope::Local),
-            "native permutation early-return must apply"
+                .all(|l| l.scope == LookupScope::Local),
+            "native folder supports only local lookup buses"
         );
         let mut builder = SymbolicAirBuilder::<F>::new(AirLayout {
             main_width: main,

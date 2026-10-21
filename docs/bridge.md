@@ -33,9 +33,17 @@ The canonical, versioned public statement must bind:
 | --- | --- |
 | Deployment | Protocol domain, L1/L2 chain IDs, guest/rules/configuration version |
 | Predecessor | Accepted parent claim and starting state |
-| Range | Start/end heights, exact count and resulting state-root commitment |
+| Range | Start/end heights, exact count and the ordered per-block state roots as the `Lib_MerkleTree` batch root |
 | Canonical batch | Chain ID, batch index and SCC header hash |
 | Inputs | Approved Ethereum anchor, ordered DA/batch data and enqueue commitments |
+
+The messenger proves each withdrawal against one state-root element of the
+batch, so the statement must commit to every root in order, not only the final
+one. The SCC header's `extraData` carries a proposer-supplied timestamp,
+submitter, `lastBatchBlockHash` and `lastBatchBlockNumber` that the SCC never
+checks; the guest must derive them: the end height equals
+`prevTotalElements + batchSize` and the last block hash equals the hash of the
+last derived block.
 
 The guest must authenticate these inputs and reproduce Metis derivation and
 execution exactly. First pin the deployed Andromeda node release, fork rules,
@@ -53,8 +61,11 @@ pinned production node on real mainnet batches, matching every state root and
 SCC commitment. Rebuild for Ziren's runtime rather than reusing its existing
 big-endian MIPS binary.
 
-If this candidate is used, its [host oracle](https://github.com/MetisProtocol/mvm/blob/61ef7e9a9a1f404505279e1d86f2c26a885bcc86/go/op-preimage/oracle.go)
-does not itself authenticate returned bytes. Proved execution must check typed
+If this candidate is used, its [oracle client](https://github.com/MetisProtocol/mvm/blob/61ef7e9a9a1f404505279e1d86f2c26a885bcc86/go/op-preimage/oracle.go)
+returns bytes unchecked; the host-side
+[`WithVerification`](https://github.com/MetisProtocol/mvm/blob/61ef7e9a9a1f404505279e1d86f2c26a885bcc86/go/op-preimage/verifier.go)
+wrapper checks keccak and sha preimages, passes blob field elements through
+unverified, and runs outside the proof. Proved execution must check typed
 preimages, trie witnesses, blob commitments and precompile results. Missing data,
 wrong enqueue order, unsupported forks and a derived height different from the
 claimed ending height must reject. Reconcile the candidate configuration's
@@ -85,6 +96,9 @@ preserving message proofs, sender authentication, escrow and replay protection.
 
 1. `MetisValidityAdapter` checks the statement's domain, approved L1 anchor,
    canonical candidate, exact range/configuration and accepted predecessor.
+   The anchor must be an ancestor of the verifying block: `blockhash` within
+   the 256-block window, or a hash checkpointed earlier on L1 as OP Succinct's
+   `checkpointBlockHash` does. A proof against any other anchor is rejected.
 2. It computes the expected output digest, calls the approved complete verifier
    and atomically records `(chainId, batchIndex, batchHeaderHash)` as proven.
    The SCC header hash alone does not bind chain ID and batch index.
@@ -97,6 +111,13 @@ preserving message proofs, sender authentication, escrow and replay protection.
 5. Proven batches and their ancestors cannot be deleted or truncated. An authorized
    invalid-candidate reset must preserve the proven prefix and prevent descendants
    from finalizing across a gap.
+6. Proof-only finality halts every withdrawal when no approved configuration can
+   prove the chain: a Metis fork, a Ziren defect or a prover outage. Define the
+   recovery before activation: governance approves a replacement guest/verifier
+   configuration that continues from the proven prefix, behind a timelock and
+   public notice. OP Succinct's `fallbackTimeout` shows the permissionless
+   proposer mechanism; its proof-free optimistic mode is not adopted, and no
+   time-only acceptance of unproven batches is permitted.
 
 This needs coordinated SCC/finality and messenger upgrades plus proposer/relayer
 integration. Deploying a verifier alone does not change withdrawal authority.
