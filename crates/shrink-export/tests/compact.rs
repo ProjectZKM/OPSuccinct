@@ -28,23 +28,23 @@ fn fibonacci_compact_shrink() -> anyhow::Result<()> {
     let core = prover.prove_core(&pk, program, &stdin, opts, ZKMContext::default())?;
     let public_values = core.public_values.clone();
     let compressed = prover.compress(&vk, core, vec![], opts)?;
-    let terminal = prover.shrink_with::<CompactShrink<Keccak256Suite>>(compressed, opts)?;
+    let shrink = prover.shrink_with::<CompactShrink<Keccak256Suite>>(compressed, opts)?;
     // This test just generated its own setup key. Production callers must
     // obtain this ID independently, before accepting any submitted proof.
-    let trusted = ShrinkVerifierData::from_trusted_key(terminal.vk.clone());
+    let trusted = ShrinkVerifierData::from_trusted_key(shrink.vk.clone());
     prover.verify_shrink_with::<CompactShrink<Keccak256Suite>>(
-        &terminal,
+        &shrink,
         &vk,
         &trusted,
         &public_values,
     )?;
 
-    let mut wrong_key = terminal.vk.clone();
+    let mut wrong_key = shrink.vk.clone();
     wrong_key.pc_start += KoalaBear::ONE;
     let wrong_trusted = ShrinkVerifierData::from_trusted_key(wrong_key);
     assert!(prover
         .verify_shrink_with::<CompactShrink<Keccak256Suite>>(
-            &terminal,
+            &shrink,
             &vk,
             &wrong_trusted,
             &public_values
@@ -54,7 +54,7 @@ fn fibonacci_compact_shrink() -> anyhow::Result<()> {
     wrong_vk.vk.pc_start += KoalaBear::ONE;
     assert!(prover
         .verify_shrink_with::<CompactShrink<Keccak256Suite>>(
-            &terminal,
+            &shrink,
             &wrong_vk,
             &trusted,
             &public_values
@@ -64,13 +64,13 @@ fn fibonacci_compact_shrink() -> anyhow::Result<()> {
     wrong_values[0] ^= 1;
     assert!(prover
         .verify_shrink_with::<CompactShrink<Keccak256Suite>>(
-            &terminal,
+            &shrink,
             &vk,
             &trusted,
             &ZKMPublicValues::from(&wrong_values)
         )
         .is_err());
-    let mut malformed = terminal.clone();
+    let mut malformed = shrink.clone();
     malformed.proof.public_values.pop();
     assert!(prover
         .verify_shrink_with::<CompactShrink<Keccak256Suite>>(
@@ -80,7 +80,7 @@ fn fibonacci_compact_shrink() -> anyhow::Result<()> {
             &public_values
         )
         .is_err());
-    let mut malformed = terminal.clone();
+    let mut malformed = shrink.clone();
     malformed.proof.jagged_shard_proof.evaluation_proof =
         zkm_pcs::shard_level::shard_proof::EvaluationProof::Empty;
     assert!(prover
@@ -95,8 +95,8 @@ fn fibonacci_compact_shrink() -> anyhow::Result<()> {
     // Transport codec against the real geometry: exactly one packet encodes
     // the proof, every header/shape rejection path fires, and a packet that
     // decodes with one changed field still fails native verification.
-    let profile = Profile::from_trusted_proof(&terminal.vk, &terminal.proof, Mode::Raw, false)?;
-    let packet = profile.encode(&terminal.proof)?;
+    let profile = Profile::from_trusted_proof(&shrink.vk, &shrink.proof, Mode::Raw, false)?;
+    let packet = profile.encode(&shrink.proof)?;
     let decoded = profile.decode(&packet)?;
     assert_eq!(profile.encode(&decoded)?, packet);
     let rejected = |label: &str, edit: &dyn Fn(&mut Vec<u8>)| {
@@ -117,7 +117,7 @@ fn fibonacci_compact_shrink() -> anyhow::Result<()> {
     let value = u32::from_le_bytes(altered[38..42].try_into().unwrap());
     let value = if value == 0 { 1 } else { value - 1 };
     altered[38..42].copy_from_slice(&value.to_le_bytes());
-    let mut tampered = terminal.clone();
+    let mut tampered = shrink.clone();
     tampered.proof = profile.decode(&altered)?;
     assert!(prover
         .verify_shrink_with::<CompactShrink<Keccak256Suite>>(

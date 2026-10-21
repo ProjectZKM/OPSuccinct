@@ -105,10 +105,11 @@ type ShrinkSC = CompactShrink<Keccak256Suite>;
 pub fn export(
     directory: &Path,
     prover: &ZKMProver<DefaultProverComponents>,
-    terminal: &ZKMReduceProof<ShrinkSC>,
+    shrink: &ZKMReduceProof<ShrinkSC>,
     app: &ZKMVerifyingKey,
     trusted: &zkm_pcs::shrink::ShrinkVerifierData<Keccak256Suite>,
     public_values: &zkm_primitives::io::ZKMPublicValues,
+    derived_sumchecks: bool,
 ) -> anyhow::Result<()> {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -129,10 +130,14 @@ pub fn export(
         !existing.canonicalize()?.starts_with(&repository),
         "keep generated verifier data outside the repository"
     );
-    prover.verify_shrink_with::<ShrinkSC>(terminal, app, trusted, public_values)?;
+    prover.verify_shrink_with::<ShrinkSC>(shrink, app, trusted, public_values)?;
     std::fs::create_dir_all(parent)?;
     std::fs::create_dir_all(directory)?;
-    let profile = Profile::from_trusted_proof(&terminal.vk, &terminal.proof, Mode::Raw, false)?;
+    // With derived sumchecks the wire omits every sumcheck polynomial's linear
+    // coefficient and final evaluation; markers for those slots decode to the
+    // reconstructed values, which the compiler recognizes structurally.
+    let profile =
+        Profile::from_trusted_proof(&shrink.vk, &shrink.proof, Mode::Raw, derived_sumchecks)?;
     for (name, shift) in [("marker", 0u32), ("marker_shift", 1_000_000u32)] {
         let mut packet = b"ZKET".to_vec();
         packet.extend([1, 0]);
@@ -161,11 +166,11 @@ pub fn export(
             serde_json::to_vec(&json!({"proof":marker,"bundle":bundle}))?,
         )?;
     }
-    let terminal_prover = zkm_prover::compact_shrink_prover::<Keccak256Suite>();
-    let machine = terminal_prover.machine();
+    let shrink_prover = zkm_prover::compact_shrink_prover::<Keccak256Suite>();
+    let machine = shrink_prover.machine();
     let mut chips = Vec::new();
     for (index, chip) in machine
-        .shard_chips_named(&terminal.proof.jagged_shard_proof.chip_heights)
+        .shard_chips_named(&shrink.proof.jagged_shard_proof.chip_heights)
         .enumerate()
     {
         let main = chip.air.width();
@@ -195,17 +200,17 @@ pub fn export(
             prep,
         };
         let roots = expressions.iter().map(|e| rpn.emit(e)).collect::<Vec<_>>();
-        let opening = &terminal.proof.jagged_shard_proof.opened_values.chips[index];
+        let opening = &shrink.proof.jagged_shard_proof.opened_values.chips[index];
         let alpha = E::from_basis_coefficients_fn(|i| F::from_usize(i + 7));
         let mut inputs = opening.main.local.clone();
         inputs.extend(&opening.preprocessed.local);
-        inputs.extend(terminal.proof.public_values.iter().copied().map(E::from));
+        inputs.extend(shrink.proof.public_values.iter().copied().map(E::from));
         let expected =
             zkm_pcs::shard_level::basefold_constraint_folder::eval_constraints_shard_host(
                 chip,
                 opening,
                 alpha,
-                &terminal.proof.public_values,
+                &shrink.proof.public_values,
             );
         assert_eq!(
             rpn.run(&inputs, &roots, alpha),
@@ -227,7 +232,7 @@ pub fn export(
                     F::from_usize((i + 11) * (j + 3) * (trial + 7) + trial)
                 });
             }
-            let pv = (0..terminal.proof.public_values.len())
+            let pv = (0..shrink.proof.public_values.len())
                 .map(|i| F::from_usize(i * 19 + trial * 31))
                 .collect::<Vec<_>>();
             let alpha = E::from_basis_coefficients_fn(|j| F::from_usize(j * 3 + trial + 11));
@@ -251,10 +256,10 @@ pub fn export(
     }
     let pv = zkm_recursion_core::air::RECURSION_PUBLIC_VALUES_COL_MAP;
     let hash = |h: &[u8]| format!("0x{}", hex::encode(h));
-    let vk = &terminal.vk;
+    let vk = &shrink.vk;
     let canonical = |xs: &[F]| xs.iter().map(|v| v.as_canonical_u32()).collect::<Vec<_>>();
     let app_digest = app.hash_koalabear();
-    let metadata = json!({"suite":"keccak256-v1","profile_id":hash(&profile.id()),"field_count":profile.field_count,"hash_count":profile.digest_references,"chips":chips,
+    let metadata = json!({"suite":"keccak256-v1","profile_id":hash(&profile.id()),"field_count":profile.field_count,"hash_count":profile.digest_references,"derived_sumchecks":derived_sumchecks,"chips":chips,
   "vk":{"root":hash(&vk.commit.roots()[0]),"pc_start":vk.pc_start.as_canonical_u32(),"global":canonical(&vk.initial_global_cumulative_sum.0.x.0).into_iter().chain(canonical(&vk.initial_global_cumulative_sum.0.y.0)).collect::<Vec<_>>(),"prep":vk.chip_information.iter().map(|(n,_,(w,h))|json!([n,w,h])).collect::<Vec<_>>()},
   "public_binding":{"application":canonical(&app_digest),"recursion_root":canonical(&prover.recursion_vk_root),"application_offset":pv.zkm_vk_digest[0],"root_offset":pv.vk_root[0],"complete_offset":pv.is_complete,"execution_offset":pv.contains_execution_shard,"exit_offset":pv.exit_code,"committed_offset":pv.committed_value_digest[0].0[0],"digest_offset":pv.digest[0],"hash_inputs":zkm_recursion_core::air::NUM_PV_ELMS_TO_HASH},
   "gkr_grinding_bits":zkm_pcs::logup_gkr::gkr_grinding_bits(),

@@ -33,9 +33,9 @@ let shrink = prover.shrink_with::<CompactShrink<Keccak256Suite>>(compressed, opt
 let work = std::path::Path::new("/outside/repos/shrink-proof");
 machine::export(
     &work.join("machine"), &prover, &shrink, &application_vk,
-    &approved_verifier_data, &public_values,
+    &approved_verifier_data, &public_values, derived,
 )?;
-let profile = Profile::from_trusted_proof(&shrink.vk, &shrink.proof, Mode::Raw, false)?;
+let profile = Profile::from_trusted_proof(&shrink.vk, &shrink.proof, Mode::Raw, derived)?;
 std::fs::write(work.join("raw.bin"), profile.encode(&shrink.proof)?)?;
 let statement = serde_json::json!({
     "output_digest": format!("0x{}", hex::encode(public_values.hash()))
@@ -45,7 +45,34 @@ std::fs::write(work.join("statement.json"), serde_json::to_vec(&statement)?)?;
 
 The verifier data, application key and public values must come from your approved
 setup/statement. Machine export fully verifies the reference before emitting its
-metadata and markers. `Mode::Raw` with `derived_sumchecks=false` matches that export.
+metadata and markers. `Mode::Raw` with the same `derived` flag matches that export.
+With `derived = true` the wire omits every sumcheck polynomial's linear
+coefficient and final evaluation, and the jagged PCS claims that repeat the
+zerocheck openings. The verifier reconstructs them, which is the cheaper encoding.
+
+The `export_fixture` example in `crates/shrink-export` runs this sequence. It
+derives the verifier data from the proof's own key, which suits local
+reproduction only.
+
+```sh
+cargo run --release -p opsuccinct-shrink-export --features machine --example export_fixture -- \
+  prove /path/to/guest.elf /outside/repos/shrink-proof 10 --derived
+```
+
+To check a real Ethereum block, start from a compressed block proof such as an
+EthProofs worker output: its `proof.bin`, its `public_values.bin` and the guest
+`program.elf` it was proven with. The `shrink` mode runs only the compact
+shrink, and `replay` re-exports a saved `shrink.bin` without proving again.
+
+```sh
+cargo run --release -p opsuccinct-shrink-export --features machine --example export_fixture -- \
+  shrink /path/to/proof.bin /path/to/program.elf /path/to/public_values.bin \
+  /outside/repos/shrink-proof --derived
+```
+
+The shrink proof's geometry does not depend on the guest workload, so one
+profile serves every guest. Only the application key, a constant of the
+compiled program, differs between guests.
 
 ## Compile and verify
 

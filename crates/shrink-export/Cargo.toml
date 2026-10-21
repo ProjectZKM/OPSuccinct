@@ -24,6 +24,10 @@ zkm-core-executor = { workspace = true, optional = true }
 zkm-recursion-core = { workspace = true, optional = true }
 zkm-primitives = { workspace = true, optional = true }
 
+[[example]]
+name = "export_fixture"
+required-features = ["machine"]
+
 [features]
 default = []
 machine = ["dep:anyhow", "dep:hex", "dep:serde_json", "dep:p3-air", "dep:p3-koala-bear", "dep:p3-uni-stark", "dep:zkm-prover", "dep:zkm-core-machine", "dep:zkm-core-executor", "dep:zkm-recursion-core", "dep:zkm-primitives"]

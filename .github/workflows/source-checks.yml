@@ -51,4 +51,4 @@ jobs:
       - name: Fixture-free Foundry tests
         run: >-
           forge test --root contracts/ziren-shrink-verifier
-          --no-match-contract 'KeccakTerminalVerifierTest|OptimizedKernelsTest|KeccakWireReaderTest|StackedWhirTest'
+          --no-match-contract 'ShrinkReferenceVerifierTest|OptimizedKernelsTest|KeccakWireReaderTest|StackedWhirTest'

@@ -38,10 +38,24 @@ The reference interpreter refuses to enter the WHIR tail until op 17 has
 bound all 32 output-digest bytes, and the native compiler asserts the same of
 the approved program at build time; the program hash is not the only guard.
 
-The native outer verifier's jagged-eval sumcheck is replayed into the
-transcript only. Its closing identity is computed directly from the opened
-values, so those coefficients are transcript inputs rather than checked
-relations; re-rolling them still requires clearing the WHIR proof-of-work.
+Ziren's host verifier evaluates the jagged weight in closed form, one
+branching program per column, and only replays the jagged-eval sumcheck.
+Current Ziren leaves chip heights unpadded, which makes every column interval
+unaligned, so the compiler instead verifies that sumcheck as Ziren's recursion
+verifier does. It checks every round, then checks one branching program and
+the equality terms of each column's prefix sums at the final point. The
+claimed sum then becomes the bound weight. Prefix-sum products share their
+common bits through the compiler's operation cache. Padded, power-of-two
+layouts keep the cheaper closed form with a transcript-only replay.
+
+With `derived_sumchecks`, the wire omits each sumcheck polynomial's linear
+coefficient and final evaluation. The verifier reconstructs the linear
+coefficient from `p(0) + p(1) = claim`, which replaces that equality check,
+and carries the final evaluation forward as the reduced claim. The jagged PCS
+evaluation claims (`y_per_chip`) are omitted too: each equals a zerocheck
+opening already on the wire, or zero for a padding column. The decoder
+restores them and the encoder rejects a proof where they differ, so the
+on-chain verifier checks exactly the native proof that decoding produces.
 
 Transport is not canonical on chain. The native entry accepts raw and
 dictionary-encoded packets under one profile and never reads some schema

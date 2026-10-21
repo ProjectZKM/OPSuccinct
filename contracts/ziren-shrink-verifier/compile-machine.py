@@ -73,6 +73,8 @@ class Compiler:
     def field(self,x):assert isinstance(x,dict) and 'f' in x;return Ref(self,0x40000000|x['f'])
     def ext(self,x):
         x=x['value'] if isinstance(x,dict) and 'value' in x else x
+        # A value the decoder derives as zero (such as a padding claim) is a constant.
+        if len(x)==4 and all(v==0 for v in x):return self.ref(0)
         assert len(x)==4 and [v['f'] for v in x]==list(range(x[0]['f'],x[0]['f']+4))
         return Ref(self,0x20000000|x[0]['f'])
     def exts(self,x):return [self.ext(v) for v in x]
@@ -90,7 +92,52 @@ class Compiler:
         for op,a,b in desc['air_ops']:values.append(self.binary([4,5,6][op],arg(a),arg(b)))
         return reduce(lambda acc,i:acc*alpha+arg(i),desc['air_roots'],self.ref(0))
 
+SUMCHECK_KEYS={'claimed_sum','point_and_eval','univariate_polys'}
+def slot(a,b):
+    return isinstance(a,int) and isinstance(b,int) and a!=b and canonical(b)-canonical(a)==1_000_000
+def ext_mul(a,b):
+    # KoalaBear E4 over X^4-3, lane-wise canonical integers.
+    out=[0]*4
+    for i,x in enumerate(a):
+        for j,y in enumerate(b):
+            k=i+j
+            if k<4:out[k]=(out[k]+x*y)%P
+            else:out[k-4]=(out[k-4]+3*x*y)%P
+    return out
+def ext_of(x):
+    assert isinstance(x,dict) and len(x['value'])==4
+    return [canonical(v) for v in x['value']]
+def derived_sumcheck(a,b):
+    """Layout of a sumcheck whose linear coefficients and final evaluation are
+    omitted from the wire. Both marker files must reproduce the decoder's
+    reconstruction exactly before a slot is accepted as derived."""
+    out={'claimed_sum':layout(a['claimed_sum'],b['claimed_sum']),'univariate_polys':[]}
+    point=layout(a['point_and_eval'][0],b['point_and_eval'][0])
+    claims=[ext_of(a['claimed_sum']),ext_of(b['claimed_sum'])]
+    polys=list(zip(a['univariate_polys'],b['univariate_polys']));assert len(polys)==len(point)>0
+    for i,(pa,pb) in enumerate(polys):
+        ca,cb=pa['coefficients'],pb['coefficients'];assert len(ca)==len(cb)>=2
+        coefficients=[]
+        for j,(x,y) in enumerate(zip(ca,cb)):
+            if j==1:coefficients.append({'derived':'linear'})
+            else:coefficients.append(layout(x,y))
+        alphas=[ext_of(m['point_and_eval'][0][len(point)-1-i]) for m in (a,b)]
+        for m,(c,claim,alpha) in enumerate(zip((ca,cb),claims,alphas)):
+            values=[ext_of(v) for v in c]
+            expected=[(cl-2*c0-sum(rest))%P for cl,c0,rest in zip(claim,values[0],zip(*values[2:]) if len(values)>2 else [()]*4)]
+            assert values[1]==expected,('derived linear coefficient mismatch',i,m)
+            acc=[0]*4
+            for v in reversed(values):acc=[(x+y)%P for x,y in zip(ext_mul(acc,alpha),v)]
+            claims[m]=acc
+        out['univariate_polys'].append({'coefficients':coefficients})
+    for m in (a,b):assert ext_of(m['point_and_eval'][1])==claims[0 if m is a else 1],'derived final evaluation mismatch'
+    out['point_and_eval']=[point,{'derived':'final'}]
+    return out
+
 def layout(a,b):
+    if isinstance(a,dict) and a.keys()==SUMCHECK_KEYS==b.keys():
+        first=a['univariate_polys'][0]['coefficients'][1]['value'][0]
+        if not slot(first,b['univariate_polys'][0]['coefficients'][1]['value'][0]):return derived_sumcheck(a,b)
     if isinstance(a,list):
         if len(a)==32 and all(isinstance(v,int) and 0<=v<256 for v in a) and bytes(a[:8])==b'EVMDIGST':
             assert a==b;return {'h':int.from_bytes(bytes(a[8:12]),'little')}
@@ -106,12 +153,17 @@ def layout(a,b):
         return {'f':canonical(a)-1}
     return a
 
+def eq_factor(x,y):
+    # (1-x)(1-y)+xy with one multiplication.
+    xy=x*y;return 1-x-y+xy+xy
 def eq(a,b):
     assert len(a)==len(b)
-    return reduce(lambda acc,p:acc*((1-p[0])*(1-p[1])+p[0]*p[1]),zip(a,b),1)
+    return reduce(lambda acc,p:acc*eq_factor(*p),zip(a,b),1)
 def table(point):
+    # Each level multiplies once per entry: x*(1-r) is formed as x-x*r.
     v=[1]
-    for r in point:v=[x*(1-r) for x in v]+[x*r for x in v]
+    for r in point:
+        high=[x*r for x in v];v=[x-h for x,h in zip(v,high)]+high
     return v
 def mle(values,point):
     assert len(values)==1<<len(point);v=list(values)
@@ -120,17 +172,25 @@ def mle(values,point):
 def horner(a,x):return reduce(lambda v,c:v*x+c,reversed(a),0)
 def geq(threshold,point):
     assert len(threshold)==len(point);v=1
-    for x,y in zip(reversed(threshold),reversed(point)):v=((1-y)*(1-x)+y*x)*v+y*(1-x)
+    for x,y in zip(reversed(threshold),reversed(point)):
+        xy=x*y;v=(1-x-y+xy+xy)*v+(y-xy)
     return v
+def is_derived(x):return isinstance(x,dict) and 'derived' in x
 def sumcheck(c,p,degree):
-    polys=[c.exts(poly['coefficients']) for poly in p['univariate_polys']]
     point=c.exts(p['point_and_eval'][0]);claim=c.ext(p['claimed_sum'])
-    assert len(polys)==len(point) and len(polys)>0
-    for i,poly in enumerate(polys):
-        assert len(poly)==degree+1;c.equal(poly[0]+sum(poly),claim)
+    polys=p['univariate_polys'];assert len(polys)==len(point) and len(polys)>0
+    for i,entry in enumerate(polys):
+        raw=entry['coefficients'];assert len(raw)==degree+1
+        poly=[None if is_derived(v) else c.ext(v) for v in raw]
+        if poly[1] is None:
+            # The wire omits the linear coefficient; p(0)+p(1)=claim defines it.
+            poly[1]=claim-2*poly[0]-sum(poly[2:],c.ref(0))
+        else:c.equal(poly[0]+sum(poly),claim)
         for v in poly:c.observe(v,11)
         x=c.sample();c.equal(x,point[len(point)-1-i]);claim=horner(poly,x)
-    c.equal(claim,c.ext(p['point_and_eval'][1]));return point,claim
+    final=p['point_and_eval'][1]
+    if not is_derived(final):c.equal(claim,c.ext(final))
+    return point,claim
 def affine(c,a,main,prep):
     return sum((c.ref(weight)*(main if kind==0 else prep)[index] for kind,index,weight in a['weights']),c.ref(a['constant']))
 def lookup(c,a,main,prep,alpha,betas):
@@ -192,7 +252,11 @@ def gkr_and_zero(c,meta,s,pv):
         mask=geq(c.exts(o['quotient'][0]),[0]+z)
         ob=sum((o*b for o,b in zip(m+pp,batch_powers)),c.ref(0));rlc=rlc*lam+eqval*(ce-pra*mask+ob)
         opened.append((pp,m))
-    c.equal(rlc,c.ext(zero['point_and_eval'][1]));sumcheck(c,zero,4);observe_openings(c,opened)
+    if is_derived(zero['point_and_eval'][1]):
+        # The final evaluation is reconstructed by the sumcheck itself.
+        _,final=sumcheck(c,zero,4);c.equal(rlc,final)
+    else:c.equal(rlc,c.ext(zero['point_and_eval'][1]));sumcheck(c,zero,4)
+    observe_openings(c,opened)
     return z,opened
 
 def poseidon(c,values,constants):
@@ -227,7 +291,7 @@ def public_bindings(c,meta,pv):
     for i in range(8):c.equal(Ref(c,digest.i+i),pv[b['digest_offset']+i])
 
 def global_balance(c,meta,s):
-    # Supported terminal has only local lookup buses. Requiring the native
+    # The supported shrink machine has only local lookup buses. Requiring the native
     # identity digest on every chip is stronger than checking their sum, and
     # establishes the same final global-balance result without curve arithmetic.
     identity=[637514027,1595065213,1998064738,72333738,1211544370,822986770,1518535784,
@@ -264,6 +328,72 @@ def branching(c,start,end,zrow,zindex):
         v=out
     return v[0]
 
+def is_power_interval(start,end):
+    height=end-start;return height>0 and height&(height-1)==0 and start%height==0
+
+def eq_bits(c,value,vars,cuts):
+    """EQ(bits_be(value,len(vars)), vars) with 0/1 constants folded. Each bit
+    segment between cuts is a most-significant-first product chain, and the
+    segments are multiplied left to right, so the compiler's operation cache
+    shares every common prefix across columns."""
+    n=len(vars);bits=[(value>>(n-1-j))&1 for j in range(n)]
+    def chain(lo,hi):
+        acc=c.ref(1)
+        for j in range(lo,hi):acc=acc*(vars[j] if bits[j] else 1-vars[j])
+        return acc
+    parts=[chain(a,b) for a,b in zip(cuts,cuts[1:])]
+    return reduce(lambda acc,part:acc*part,parts[1:],parts[0])
+
+def eq_bit_cuts(values,n,max_segments=3):
+    """Choose segment cuts minimizing the distinct products eq_bits emits for
+    these constant values: trie nodes per segment plus partial combinations."""
+    from itertools import combinations
+    def field(v,a,b):return (v>>(n-b))&((1<<(b-a))-1)
+    def cost(cuts):
+        total=0
+        for vals in values:
+            for a,b in zip(cuts,cuts[1:]):
+                total+=sum(len({field(v,a,a+d) for v in vals}) for d in range(1,b-a+1))
+            for i in range(2,len(cuts)):
+                total+=len({tuple(field(v,cuts[j],cuts[j+1]) for j in range(i)) for v in vals})
+        return total
+    options=[(0,)+inner+(n,) for k in range(max_segments) for inner in combinations(range(1,n),k)]
+    return min(options,key=lambda cuts:(cost(cuts),cuts))
+
+def branching_program(c,zrow,zindex,first,second):
+    """Ziren's BranchingProgram::eval at field points (big-endian inputs)."""
+    layers=max(len(zrow),len(zindex))
+    def lsb(point,i):return point[len(point)-1-i] if i<len(point) else c.ref(0)
+    result=[c.ref(0)]*4;result[2]=c.ref(1)  # success: carry=0, comparison=1
+    for layer in range(layers,-1,-1):
+        point=[lsb(zrow,layer),lsb(zindex,layer),lsb(first,layer),lsb(second,layer)]
+        lagrange=table(point)
+        new=[]
+        for state in range(4):
+            carry,comparison=state&1,state>>1;acc=[c.ref(0)]*4
+            for i,weight in enumerate(lagrange):
+                row,index,curr,nxt=i&1,(i>>1)&1,(i>>2)&1,(i>>3)&1
+                total=row+carry+curr
+                if total&1!=index:continue
+                out=(total>>1)|((comparison if index==nxt else nxt)<<1)
+                acc[out]=acc[out]+weight
+            new.append(sum((a*r for a,r in zip(acc,result)),c.ref(0)))
+        result=new
+    return result[0]
+
+def jagged_eval(c,je,offsets,w,zrow,zindex):
+    """Verify the jagged-eval sumcheck as Ziren's recursion verifier does and
+    return its bound claimed sum: Sum_k w_k BP(t_k, t_{k+1})."""
+    claimed=c.ext(je['claimed_sum']);c.observe(claimed,11)
+    last=offsets[-1];half=(last-1).bit_length()+1 if last>1 else 1
+    point,final=sumcheck(c,je,2);assert len(point)==2*half
+    first,second=point[:half],point[half:]
+    cuts=eq_bit_cuts((offsets[:-1],offsets[1:]),half)
+    total=sum((wc*eq_bits(c,lo,first,cuts)*eq_bits(c,hi,second,cuts)
+               for wc,lo,hi in zip(w,offsets,offsets[1:])),c.ref(0))
+    c.equal(final,total*branching_program(c,zrow,zindex,first,second))
+    return claimed
+
 def jagged(c,meta,s,b,z,opened):
     c.phase('jagged PCS');packing=b['packing'];offsets=packing['offsets'];widths=packing['column_counts'];assert sum(widths)==len(offsets)-1
     groups=[];names={d['name']:i for i,d in enumerate(meta['chips'])};areas=[]
@@ -291,14 +421,19 @@ def jagged(c,meta,s,b,z,opened):
         p0,p1,p2=c.exts(r['evals']);c.observe(p0,11);c.observe(-3*half*p0+2*p1-half*p2,11);c.observe(half*p0-p1+half*p2,11)
         c.equal(p0+p1,claim);x=c.sample();zstar.append(x);claim=p0*(x-1)*(x-2)*half-p1*x*(x-2)+p2*x*(x-1)*half
     for x,yv in zip(zstar,c.exts(red['eval_point'])):c.equal(x,yv)
-    weight=sum((wc*branching(c,lo,hi,z,list(reversed(zstar))) for wc,lo,hi in zip(w,offsets,offsets[1:])),c.ref(0))
-    q=c.ext(red['q_at_z']);c.equal(claim,q*weight)
-    # This is the existing native outer verifier's transcript-only jagged-eval
-    # replay; the closing identity above is independently checked in full.
-    je=b['jagged_eval']['partial_sumcheck_proof'];c.observe(c.ext(je['claimed_sum']),11)
-    for poly in je['univariate_polys']:
-        for x in c.exts(poly['coefficients']):c.observe(x,11)
-        c.sample()
+    q=c.ext(red['q_at_z'])
+    je=b['jagged_eval']['partial_sumcheck_proof']
+    if all(is_power_interval(lo,hi) for lo,hi in zip(offsets,offsets[1:])):
+        # Padded, aligned columns: the closed form is cheaper than verifying the
+        # jagged-eval sumcheck, whose transcript is then only replayed.
+        weight=sum((wc*branching(c,lo,hi,z,list(reversed(zstar))) for wc,lo,hi in zip(w,offsets,offsets[1:])),c.ref(0))
+        c.equal(claim,q*weight)
+        c.observe(c.ext(je['claimed_sum']),11)
+        for entry in je['univariate_polys']:
+            for x in c.exts(entry['coefficients']):c.observe(x,11)
+            c.sample()
+    else:
+        c.equal(claim,q*jagged_eval(c,je,offsets,w,z,list(reversed(zstar))))
     target=21+logceil(sum(area>>21 for area in areas));orig=len(zstar)
     while len(zstar)<target:zstar.append(c.sample())
     for x in zstar[orig:min(21,target)]:q=q*(1-x)

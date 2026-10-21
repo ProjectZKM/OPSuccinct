@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
-import {KeccakTerminalVerifier} from "../src/KeccakTerminalVerifier.sol";
+import {ShrinkReferenceVerifier} from "../src/ShrinkReferenceVerifier.sol";
 
-interface TerminalVm {
+interface ReferenceVm {
     function envString(string calldata) external returns (string memory);
     function readFileBinary(string calldata) external view returns (bytes memory);
     function readFile(string calldata) external view returns (string memory);
@@ -10,8 +10,8 @@ interface TerminalVm {
     function parseJsonUint(string calldata, string calldata) external pure returns (uint256);
 }
 
-contract KeccakTerminalVerifierTest {
-    TerminalVm constant vm = TerminalVm(address(uint160(uint256(keccak256("hevm cheat code")))));
+contract ShrinkReferenceVerifierTest {
+    ReferenceVm constant vm = ReferenceVm(address(uint160(uint256(keccak256("hevm cheat code")))));
     event FullVerificationGas(uint256 executionGas, uint256 programBytes, uint256 proofBytes, uint256 runtimeBytes);
     event log_named_uint(string key, uint256 value);
 
@@ -21,7 +21,7 @@ contract KeccakTerminalVerifierTest {
         bytes memory packet = vm.readFileBinary(string.concat(root, "/raw.bin"));
         bytes32 digest =
             vm.parseJsonBytes32(vm.readFile(string.concat(root, "/compiled/statement.json")), ".output_digest");
-        KeccakTerminalVerifier verifier = new KeccakTerminalVerifier(keccak256(program));
+        ShrinkReferenceVerifier verifier = new ShrinkReferenceVerifier(keccak256(program));
         uint256 before = gasleft();
         require(verifier.verify(program, packet, digest));
         uint256 gasUsed = before - gasleft();

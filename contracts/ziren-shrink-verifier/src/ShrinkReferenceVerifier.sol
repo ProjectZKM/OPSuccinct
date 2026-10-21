@@ -11,7 +11,7 @@ import {StackedWhir as W} from "./StackedWhir.sol";
 /// stacked WHIR verification. No off-chain validity result is accepted.
 /// A program hash MUST be authenticated independently of submitted proofs.
 /// This baseline intentionally permits measuring gas beyond mainnet limits.
-contract KeccakTerminalVerifier {
+contract ShrinkReferenceVerifier {
     bytes32 public immutable verifierProgramHash;
     error InvalidProgram();
     error InvalidPacket();

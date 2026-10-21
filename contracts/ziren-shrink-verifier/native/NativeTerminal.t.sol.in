@@ -2,7 +2,7 @@
 pragma solidity ^0.8.30;
 import {CompiledTerminalVerifier} from "../src/CompiledTerminalVerifier.sol";
 import {CompiledWhirVerifier} from "../src/CompiledWhirVerifier.sol";
-import {KeccakTerminalVerifier} from "../src/KeccakTerminalVerifier.sol";
+import {ShrinkReferenceVerifier} from "../src/ShrinkReferenceVerifier.sol";
 
 interface NativeVm {
     function envString(string calldata) external returns(string memory);
@@ -17,7 +17,7 @@ interface NativeVm {
 contract NativeTerminalTest {
     NativeVm constant vm=NativeVm(address(uint160(uint256(keccak256("hevm cheat code")))));
     CompiledTerminalVerifier nativeVerifier;
-    KeccakTerminalVerifier referenceVerifier;
+    ShrinkReferenceVerifier referenceVerifier;
     CompiledWhirVerifier tail;
     address[] modules;
     bytes packet;
@@ -52,7 +52,7 @@ contract NativeTerminalTest {
         packet=vm.readFileBinary(string.concat(fixture,"/raw.bin"));
         program=vm.readFileBinary(string.concat(fixture,"/compiled/program.bin"));
         digest=vm.parseJsonBytes32(vm.readFile(string.concat(fixture,"/compiled/statement.json")),".output_digest");
-        referenceVerifier=new KeccakTerminalVerifier(keccak256(program));
+        referenceVerifier=new ShrinkReferenceVerifier(keccak256(program));
     }
 
     function testCompleteNativeAndReferenceAgree() public view {

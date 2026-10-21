@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate a terminal schedule with pinned ethereum/soundcalc (PCS model only).
+"""Evaluate a compact shrink WHIR schedule with pinned ethereum/soundcalc (PCS model only).
 
 The native implementation commits oracles at explicit rates. soundcalc normally
 derives a fixed-domain-shift schedule, so this adapter replaces those derived

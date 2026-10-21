@@ -16,7 +16,7 @@ use zkm_pcs::jagged_pcs::jagged::JaggedPcsProofGeneric;
 use zkm_pcs::shrink::{Challenge as E, CompactShrink, Keccak256Suite, Val as F};
 type SC = CompactShrink<Keccak256Suite>;
 type M = zkm_pcs::shrink::CompactMmcs<Keccak256Suite>;
-fn terminal_key_digest(vk: &StarkVerifyingKey<SC>) -> [u8; 32] {
+fn shrink_key_digest(vk: &StarkVerifyingKey<SC>) -> [u8; 32] {
     zkm_pcs::shrink::shrink_key_digest(vk)
 }
 fn root_felts(root: &[u8; 32]) -> [F; 8] {
@@ -114,7 +114,7 @@ impl Profile {
     ) -> Result<Self> {
         let (mut template, mut bundle) = split(proof)?;
         let mut tape = Tape::writer(true, derived_sumchecks);
-        visit_parts(&mut template, &mut bundle, &mut tape)?;
+        visit_parts(&mut template, &mut bundle, &mut tape, &prep_order(vk))?;
         ensure(
             tape.digests.len() < 65_536 && tape.leaves.len() < 65_536,
             "profile exceeds u16 dictionary bounds",
@@ -134,7 +134,7 @@ impl Profile {
 
     pub fn id(&self) -> Digest {
         let mut bytes = b"ziren-keccak-wire-profile-v1".to_vec();
-        bytes.extend(terminal_key_digest(&self.vk));
+        bytes.extend(shrink_key_digest(&self.vk));
         bytes.extend([self.mode as u8, self.derived_sumchecks as u8]);
         bytes.extend(&self.metadata);
         Keccak256Hash.hash_iter(bytes)
@@ -154,7 +154,7 @@ impl Profile {
     fn tape(&self, proof: &ShardProof<SC>) -> Result<Tape> {
         let (mut proof, mut bundle) = split(proof)?;
         let mut tape = Tape::writer(false, self.derived_sumchecks);
-        visit_parts(&mut proof, &mut bundle, &mut tape)?;
+        visit_parts(&mut proof, &mut bundle, &mut tape, &prep_order(&self.vk))?;
         ensure(
             tape.metadata == self.metadata && tape.leaves == self.leaves,
             "proof does not match approved profile geometry",
@@ -292,7 +292,7 @@ impl Profile {
         };
         let mut proof = self.template.clone();
         let mut bundle = self.bundle.clone();
-        visit_parts(&mut proof, &mut bundle, &mut tape)?;
+        visit_parts(&mut proof, &mut bundle, &mut tape, &prep_order(&self.vk))?;
         ensure(
             tape.f_at == tape.fields.len()
                 && tape.d_at == tape.digests.len()
@@ -320,13 +320,13 @@ fn split(proof: &ShardProof<SC>) -> Result<(ShardProof<SC>, Bundle)> {
     )?;
     let bytes = match &shard.evaluation_proof {
         EvaluationProof::Bytes(bytes) => bytes,
-        _ => return Err(WireError("terminal requires Bytes WHIR")),
+        _ => return Err(WireError("compact shrink requires Bytes WHIR")),
     };
     let bundle = Bundle::from_bytes_for_verification(bytes)
         .ok_or(WireError("invalid native WHIR encoding"))?;
     ensure(
         bundle.whir_proof.is_some() && bundle.commit.original_commitment.roots().len() == 1,
-        "terminal WHIR/root shape",
+        "compact shrink WHIR/root shape",
     )?;
     ensure(
         shard.main_commitment == root_felts(&bundle.commit.original_commitment.roots()[0]),
@@ -705,8 +705,69 @@ impl Visit for PartialSumcheckProof<E> {
     }
 }
 
-fn visit_parts(proof: &mut ShardProof<SC>, bundle: &mut Bundle, t: &mut Tape) -> Result<()> {
-    t.label("KeccakTerminal/v1");
+fn prep_order(vk: &StarkVerifyingKey<SC>) -> Vec<String> {
+    vk.chip_information
+        .iter()
+        .map(|(name, _, _)| name.clone())
+        .collect()
+}
+
+/// The jagged PCS evaluation claims `y_per_chip`, rebuilt from the zerocheck
+/// openings they must equal: preprocessed columns in key order, the round's
+/// zero padding columns, then main columns in chip order and their padding.
+fn openings_as_y(
+    s: &JaggedShardProof<F, E>,
+    bundle: &Bundle,
+    prep_order: &[String],
+) -> Result<Vec<Vec<E>>> {
+    let names: Vec<&String> = s.chip_heights.keys().collect();
+    let chips = &s.opened_values.chips;
+    ensure(names.len() == chips.len(), "opened chip count")?;
+    let packing = &bundle.packing;
+    ensure(
+        packing.round_counts.len() == 2 && packing.padding_heights.len() == 2,
+        "jagged round layout",
+    )?;
+    ensure(
+        packing.round_counts[0].len() == prep_order.len(),
+        "preprocessed round layout",
+    )?;
+    ensure(
+        packing.round_counts[1].len() == chips.len(),
+        "main round layout",
+    )?;
+    let mut y = Vec::new();
+    for name in prep_order {
+        let index = names
+            .iter()
+            .position(|n| *n == name)
+            .ok_or(WireError("preprocessed chip without openings"))?;
+        y.push(chips[index].preprocessed.local.clone());
+    }
+    y.extend(packing.padding_heights[0].iter().map(|_| vec![E::ZERO]));
+    y.extend(chips.iter().map(|chip| chip.main.local.clone()));
+    y.extend(packing.padding_heights[1].iter().map(|_| vec![E::ZERO]));
+    Ok(y)
+}
+
+fn visit_parts(
+    proof: &mut ShardProof<SC>,
+    bundle: &mut Bundle,
+    t: &mut Tape,
+    prep_order: &[String],
+) -> Result<()> {
+    t.label("CompactShrink/v1");
+    // A template writer zeroes fields as it visits them, so the claims a
+    // derived profile omits are checked against the openings beforehand.
+    let encoded_y = if t.derived && !t.decoding {
+        Some(openings_as_y(
+            &proof.jagged_shard_proof,
+            bundle,
+            prep_order,
+        )?)
+    } else {
+        None
+    };
     proof.public_values.visit(t)?;
     let s: &mut JaggedShardProof<F, E> = &mut proof.jagged_shard_proof;
     // The split() precondition binds both aliases, and decode restores them.
@@ -723,7 +784,29 @@ fn visit_parts(proof: &mut ShardProof<SC>, bundle: &mut Bundle, t: &mut Tape) ->
     s.preprocessed_original_commitment.visit(t)?;
     s.preprocessed_row_counts.visit(t)?;
     s.padding_row_heights.visit(t)?;
-    bundle.visit(t)
+    if !t.derived {
+        return bundle.visit(t);
+    }
+    // Derived profiles omit y_per_chip: every claim equals a zerocheck opening
+    // already on the wire, so the decoder restores it and encoding checks it.
+    let original = std::mem::take(&mut bundle.y_per_chip);
+    bundle.visit(t)?;
+    t.label("derived-y-per-chip");
+    match encoded_y {
+        None => bundle.y_per_chip = openings_as_y(s, bundle, prep_order)?,
+        Some(expected) => {
+            ensure(original == expected, "y_per_chip differs from the openings")?;
+            bundle.y_per_chip = if t.zero {
+                expected
+                    .iter()
+                    .map(|row| vec![E::ZERO; row.len()])
+                    .collect()
+            } else {
+                original
+            };
+        }
+    }
+    Ok(())
 }
 
 enum Node {

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
-import {KeccakTerminalVerifier} from "../src/KeccakTerminalVerifier.sol";
+import {ShrinkReferenceVerifier} from "../src/ShrinkReferenceVerifier.sol";
 
 /// Fixture-free checks of the interpreter's own statement gate: a program is
 /// not allowed to reach the WHIR tail unless it asserted all 32 bytes of the
 /// expected output digest, whatever the approved program hash says.
-contract KeccakTerminalProgramTest {
+contract ShrinkReferenceProgramTest {
     bytes32 constant PROFILE = keccak256("test profile");
     bytes32 constant DIGEST = keccak256("expected output digest");
 
@@ -22,7 +22,7 @@ contract KeccakTerminalProgramTest {
     }
 
     function run(bytes memory program) private returns (bytes4 selector) {
-        KeccakTerminalVerifier verifier = new KeccakTerminalVerifier(keccak256(program));
+        ShrinkReferenceVerifier verifier = new ShrinkReferenceVerifier(keccak256(program));
         (bool ok, bytes memory error) =
             address(verifier).staticcall(abi.encodeCall(verifier.verify, (program, wire(), DIGEST)));
         require(!ok && error.length >= 4, "program unexpectedly accepted or OOG");
@@ -31,7 +31,7 @@ contract KeccakTerminalProgramTest {
 
     function testProgramWithoutDigestAssertionsCannotReachWhir() public {
         bytes memory program = bytes.concat(header(), bytes1(0xff));
-        require(run(program) == KeccakTerminalVerifier.IncompleteOutputBinding.selector, "missing binding");
+        require(run(program) == ShrinkReferenceVerifier.IncompleteOutputBinding.selector, "missing binding");
     }
 
     function testProgramMissingOneDigestByteCannotReachWhir() public {
@@ -41,7 +41,7 @@ contract KeccakTerminalProgramTest {
             program = bytes.concat(program, assertByte(i, uint8(DIGEST[i])));
         }
         program = bytes.concat(program, bytes1(0xff));
-        require(run(program) == KeccakTerminalVerifier.IncompleteOutputBinding.selector, "partial binding");
+        require(run(program) == ShrinkReferenceVerifier.IncompleteOutputBinding.selector, "partial binding");
     }
 
     function testRepeatedDigestByteDoesNotCountAsComplete() public {
@@ -50,7 +50,7 @@ contract KeccakTerminalProgramTest {
             program = bytes.concat(program, assertByte(0, uint8(DIGEST[0])));
         }
         program = bytes.concat(program, bytes1(0xff));
-        require(run(program) == KeccakTerminalVerifier.IncompleteOutputBinding.selector, "repeated binding");
+        require(run(program) == ShrinkReferenceVerifier.IncompleteOutputBinding.selector, "repeated binding");
     }
 
     function testWrongDigestByteFailsAssertion() public {
@@ -60,7 +60,7 @@ contract KeccakTerminalProgramTest {
             program = bytes.concat(program, assertByte(i, i == 3 ? value ^ 1 : value));
         }
         program = bytes.concat(program, bytes1(0xff));
-        require(run(program) == KeccakTerminalVerifier.AssertionFailed.selector, "wrong byte");
+        require(run(program) == ShrinkReferenceVerifier.AssertionFailed.selector, "wrong byte");
     }
 
     function testCompleteBindingProceedsToWhirTail() public {
@@ -71,6 +71,6 @@ contract KeccakTerminalProgramTest {
         program = bytes.concat(program, bytes1(0xff));
         // All 32 bytes are bound, so the interpreter enters the WHIR tail and
         // only then rejects this program for having no WHIR section at all.
-        require(run(program) == KeccakTerminalVerifier.InvalidProgram.selector, "gate passed");
+        require(run(program) == ShrinkReferenceVerifier.InvalidProgram.selector, "gate passed");
     }
 }

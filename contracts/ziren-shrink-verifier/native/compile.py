@@ -2619,9 +2619,9 @@ def main():
             reference=reference.replace('{KeccakTranscript as T} from "./KeccakTranscript.sol"','{ReferenceKeccakTranscript as T} from "./ReferenceKeccakTranscript.sol"')
         (src/'ReferenceStackedWhir.sol').write_text(reference)
         (src/'ReferenceKoalaBear.sol').write_text((ROOT/'src/KoalaBear.sol').read_text().replace('library KoalaBear {','library ReferenceKoalaBear {'))
-        reference=(src/'KeccakTerminalVerifier.sol').read_text().replace('{StackedWhir as W} from "./StackedWhir.sol"','{ReferenceStackedWhir as W} from "./ReferenceStackedWhir.sol"')
+        reference=(src/'ShrinkReferenceVerifier.sol').read_text().replace('{StackedWhir as W} from "./StackedWhir.sol"','{ReferenceStackedWhir as W} from "./ReferenceStackedWhir.sol"')
         if a.fast_whir_transcript:reference=reference.replace('{KeccakTranscript as T} from "./KeccakTranscript.sol"','{ReferenceKeccakTranscript as T} from "./ReferenceKeccakTranscript.sol"')
-        (src/'KeccakTerminalVerifier.sol').write_text(reference)
+        (src/'ShrinkReferenceVerifier.sol').write_text(reference)
     if a.closing_module:
         closing_name='NativeQueryEvaluator' if a.offload_queries else 'NativeClosingEvaluator'
         closing_artifact=compile_contract_artifact(a.solc,src,'src/'+closing_name+'.sol',closing_name,a.closing_runs)
