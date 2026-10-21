@@ -70,6 +70,10 @@ cargo run --release -p opsuccinct-shrink-export --features machine --example exp
   /outside/repos/shrink-proof --derived
 ```
 
+`verify-packet <fixture> <packet> --derived` decodes any profile packet against
+the fixture's geometry and runs Ziren's native verifier on it, which is useful
+when comparing on-chain and native acceptance of a modified proof.
+
 The shrink proof's geometry does not depend on the guest workload, so one
 profile serves every guest. Only the application key, a constant of the
 compiled program, differs between guests.

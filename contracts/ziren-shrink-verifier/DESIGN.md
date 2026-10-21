@@ -9,7 +9,12 @@ and transcript use the selected suite. This backend supports Keccak256.
 The trusted `ShrinkVerifierData` binds suite domains, transcript absorb boundary,
 parameters, child profile and canonical key geometry. Application key, recursion
 root, complete successful execution and every public-output digest byte must
-remain bound through native export and on-chain verification. A submitted proof
+remain bound through native export and on-chain verification. The shrink AIR's
+public-values chip constrains only the eight Poseidon2 digest elements; every
+other public value, including the recursion root, application key, flags and
+output digest, is bound to the proof solely by recomputing that Poseidon2 digest.
+The verifier therefore keeps the Poseidon2 hash, as Ziren's native verifier
+does; a byte-hash suite cannot replace it. A submitted proof
 cannot choose its key, verifier program or approved module addresses.
 
 ## Export, encoding and compilation
@@ -69,6 +74,17 @@ dictionary-encoded packets under one profile and never reads some schema
 slots, while the Rust decoder accepts exactly one packet per proof.
 Verification is over decoded values; key replay protection on the statement,
 never on a packet hash.
+
+Fresh builds generate the WHIR tail as straight-line Yul (`--aot-whir-tail`).
+It is a port of the patched `StackedWhir.verify` path with every shape fixed by
+the authenticated program tail: rounds, query counts, leaf geometry, path
+heights and packet offsets are constants, while proof values are read from the
+context calldata. It keeps the Solidity tail's ABI, checks, error stages and
+calls into the pinned query and closing module. `native/differential.py`
+compares a candidate build against the Solidity tail on the honest proof and
+on random mutations of every proof section. A small set of proof fields
+(per-chip cumulative sums and the original-commitment digests) is read by
+neither the on-chain verifier nor Ziren's native verifier.
 
 Kernel, WHIR, math and constructor-created helper code is pinned. Calls use
 `STATICCALL`; frame bounds restrict register updates and prevent replacing proof

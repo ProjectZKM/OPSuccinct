@@ -42,8 +42,10 @@ def main():
         if plan.get('lazy_linear_products', False):
             command.append('--lazy-linear-products')
         command.extend(['--plan', str(args.plan)])
+        if plan.get('aot_whir_tail', False):
+            command.append('--aot-whir-tail')
     else:
-        command.append('--lazy-linear-products')
+        command.extend(['--lazy-linear-products', '--aot-whir-tail'])
     if args.fresh:
         command.append('--fresh')
     if args.dry_run:

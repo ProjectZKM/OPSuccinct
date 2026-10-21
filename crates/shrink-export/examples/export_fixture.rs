@@ -43,9 +43,36 @@ fn main() -> anyhow::Result<()> {
     } else {
         &args[2]
     });
-    std::fs::create_dir_all(&out)?;
+    if args[0] != "verify-packet" {
+        std::fs::create_dir_all(&out)?;
+    }
     let started = std::time::Instant::now();
     let prover = ZKMProver::<DefaultProverComponents>::uninitialized_with(Some(true));
+    if args[0] == "verify-packet" {
+        // verify-packet <fixture dir> <raw packet> [--derived]: decode a profile
+        // packet against the fixture's proof geometry and run native verification.
+        let dir = Path::new(&args[1]);
+        let shrink: ZKMReduceProof<Shrink> =
+            bincode::deserialize(&std::fs::read(dir.join("shrink.bin"))?)?;
+        let vk: ZKMVerifyingKey =
+            bincode::deserialize(&std::fs::read(dir.join("application_vk.bin"))?)?;
+        let public_values = read_public_values(&dir.join("public_values.bin"))?;
+        let profile = Profile::from_trusted_proof(&shrink.vk, &shrink.proof, Mode::Raw, derived)?;
+        let mut candidate = shrink.clone();
+        candidate.proof = match profile.decode(&std::fs::read(&args[2])?) {
+            Ok(proof) => proof,
+            Err(e) => {
+                println!("decode-rejected: {e}");
+                return Ok(());
+            }
+        };
+        let trusted = ShrinkVerifierData::from_trusted_key(shrink.vk.clone());
+        match prover.verify_shrink_with::<Shrink>(&candidate, &vk, &trusted, &public_values) {
+            Ok(()) => println!("native-accepted"),
+            Err(e) => println!("native-rejected: {e}"),
+        }
+        return Ok(());
+    }
     let (shrink, vk, public_values): (ZKMReduceProof<Shrink>, ZKMVerifyingKey, ZKMPublicValues) =
         match args[0].as_str() {
             "prove" => {

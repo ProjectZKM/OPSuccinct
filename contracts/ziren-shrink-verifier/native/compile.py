@@ -2360,6 +2360,9 @@ def main():
     ap.add_argument('--vector-proof-cache',action='store_true',help='transpose eight independent cache words together; retain exact bounded scalar tails')
     ap.add_argument('--branchless-products',action='store_true',help='use complete canonical product formulas even for runtime zero and one')
     ap.add_argument('--identity-branch-spans',type=Path,help='trusted operation intervals retaining zero/one product fast paths; cannot select a linear-deferral kernel')
+    ap.add_argument('--aot-whir-tail',action='store_true',help='replace the Solidity PCS tail by a generated straight-line Yul tail with identical checks')
+    ap.add_argument('--aot-whir-optimizer',choices=['minimal','full','compact'],default='full',help='Yul optimizer for the AOT WHIR tail (default full)')
+    ap.add_argument('--aot-whir-runs',type=int,default=1,help='optimizer runs for the AOT WHIR tail (default 1)')
     ap.add_argument('--update-kernels',action='store_true',help='allow longer full-optimizer builds; with reuse-kernels recompile changed sources and retain identical ones')
     a=ap.parse_args()
     if a.stack_register_spans and not a.stack_registers:ap.error('stack-register-spans requires stack-registers')
@@ -2649,6 +2652,22 @@ def main():
     whir_creation=bytes.fromhex(whir_artifact['bytecode']['object'])
     (a.out/'whir-artifact.json').write_text(json.dumps(whir_artifact)+'\n')
     (a.out/'whir-creation.bin').write_bytes(whir_creation)
+    if a.aot_whir_tail:
+        # Replace the Solidity PCS tail by an equivalent straight-line Yul tail
+        # generated from the same authenticated program tail and pinned modules.
+        from whir_aot import aot_whir_source
+        from wire import parse
+        assert all((a.offload_queries,a.closing_module,a.calldata_tail,a.inplace_tail,a.fixed_whir_profile,
+                    a.native_closing_driver,a.fast_sample,a.validated_leaf_fields,a.canonical_query_inputs)),\
+            'the AOT WHIR tail mirrors the offloaded, fixed-profile calldata tail'
+        aot=aot_whir_source(c,helpers(0,False,None,a.tower_mulmod,a.bulk_observe,a.fast_sample),256,*parse(c.tail),c.closing_module_hash)
+        (a.out/'CompiledWhirVerifier.yul').write_text(aot)
+        built=compile_yul(a.solc,aot,'CompiledWhirVerifier',cache,a.aot_whir_optimizer,a.compile_timeout or 600,a.fresh,a.aot_whir_runs)
+        assert len(bytes.fromhex(built['runtime']))<=MAX_CODE,'AOT WHIR runtime exceeds EIP-170'
+        whir_artifact={'bytecode':{'object':built['bytecode']},'deployedBytecode':{'object':built['runtime']}}
+        runtime=bytes.fromhex(built['runtime']);whir_creation=bytes.fromhex(built['bytecode'])
+        (a.out/'whir-artifact.json').write_text(json.dumps(whir_artifact)+'\n')
+        (a.out/'whir-creation.bin').write_bytes(whir_creation)
     tail_hash='0x'+kh(runtime).hex()
     check='keccak256(type(CompiledWhirVerifier).runtimeCode)'
     assert entry.count(check)==1
@@ -2676,6 +2695,7 @@ def main():
             'closing_optimizer_runs':a.closing_runs if a.closing_module else None,
             'closing_creation_hash':'0x'+kh(closing_creation).hex() if a.closing_module else None,
             'approved_whir_runtime_hash':tail_hash,'approved_whir_runtime_bytes':len(runtime),
+            'aot_whir_tail':a.aot_whir_tail,
             'merkle_path_views':a.path_views,
             'fused_base':a.fused_base,
             'fast_poseidon':a.fast_poseidon,'poseidon_linear_backend':'packed-circulant-deferred-v1' if a.fast_poseidon else None,'batch_inverse':a.batch_inverse,'tower_mulmod':a.tower_mulmod,
