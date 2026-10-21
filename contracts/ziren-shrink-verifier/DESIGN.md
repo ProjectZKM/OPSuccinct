@@ -48,6 +48,13 @@ claimed sum then becomes the bound weight. Prefix-sum products share their
 common bits through the compiler's operation cache. Padded, power-of-two
 layouts keep the cheaper closed form with a transcript-only replay.
 
+The LogUp-GKR output check `Σ n_i/d_i = 0` is evaluated as a fraction tree. The
+combined numerator must vanish and the combined denominator must be invertible,
+which rejects any zero denominator as the native verifier does, with one
+inversion instead of one per fraction. The chip-height masks use the height
+bits as constants, because the program separately asserts that the opened
+degree bits equal them.
+
 With `derived_sumchecks`, the wire omits each sumcheck polynomial's linear
 coefficient and final evaluation. The verifier reconstructs the linear
 coefficient from `p(0) + p(1) = claim`, which replaces that equality check,

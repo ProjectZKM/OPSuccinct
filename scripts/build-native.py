@@ -35,11 +35,15 @@ def main():
                '--poseidon-runs', '1', '--compile-timeout', '900',
                '--merkle-unroll', '8', '--base-power-window', '6']
     command.extend('--'+flag for flag in FLAGS)
+    # Fresh builds defer one bounded linear layer everywhere; a replayed plan
+    # keeps whatever it recorded so its bytecode reproduces exactly.
     if args.plan:
         plan = json.loads(args.plan.read_text())
         if plan.get('lazy_linear_products', False):
             command.append('--lazy-linear-products')
         command.extend(['--plan', str(args.plan)])
+    else:
+        command.append('--lazy-linear-products')
     if args.fresh:
         command.append('--fresh')
     if args.dry_run:

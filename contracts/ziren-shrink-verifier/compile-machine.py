@@ -213,7 +213,13 @@ def gkr_and_zero(c,meta,s,pv):
     betas=table([c.sample() for _ in range(logceil(arity))])
     # Production recursion AIRs have no State/GlobalAccumulation/control buses.
     assert not any(l['kind'] in (9,10,11,12) for chip in desc for l in chip['lookups'])
-    c.equal(sum((a/b for a,b in zip(n,d)),c.ref(0)),0)
+    # Sum n_i/d_i == 0 as a fraction tree: the combined numerator must vanish
+    # and the combined denominator must be invertible, which, like the native
+    # verifier, rejects any zero denominator. One inversion replaces len(d).
+    fractions=list(zip(n,d))
+    while len(fractions)>1:
+        fractions=[(a*db+b*da,da*db) for (a,da),(b,db) in zip(fractions[0::2],fractions[1::2])]+fractions[len(fractions)//2*2:]
+    total,denominator=fractions[0];c.equal(total,0);c.equal(denominator*c.inverse(denominator),1)
     for a in n+d:c.observe(a,11)
     point=[c.sample() for _ in range(initial)];ne=mle(n,point);de=mle(d,point)
     assert len(p['round_proofs'])==21
@@ -231,7 +237,7 @@ def gkr_and_zero(c,meta,s,pv):
     for chip,o in zip(desc,opening):
         m=c.exts(gkr_open[chip['name']]['main_trace_evaluations_full'] or [])
         pp=c.exts(gkr_open[chip['name']]['preprocessed_trace_evaluations_full'] or [])
-        mask=geq(c.exts(o['quotient'][0]),[0]+list(reversed(trace)))
+        mask=geq(height_bits(s,chip),[0]+list(reversed(trace)))
         for l in chip['lookups']:
             rn,rd=lookup(c,l,m,pp,alpha,betas);pn,pd=lookup(c,l,[0]*len(m),[0]*len(pp),alpha,betas)
             num=rn-pn*mask;nums.append(num if l['send'] else -num);dens.append(rd+(1-pd)*mask)
@@ -249,7 +255,7 @@ def gkr_and_zero(c,meta,s,pv):
     for chip,o in zip(desc,opening):
         m=c.exts(o['main']['local']);pp=c.exts(o['preprocessed']['local']);assert len(m)==chip['main_width'] and len(pp)==chip['prep_width']
         ce=c.emit_air(chip,m,pp,pv,a);pra=c.emit_air(chip,[c.ref(0)]*len(m),[c.ref(0)]*len(pp),pv,a)
-        mask=geq(c.exts(o['quotient'][0]),[0]+z)
+        mask=geq(height_bits(s,chip),[0]+z)
         ob=sum((o*b for o,b in zip(m+pp,batch_powers)),c.ref(0));rlc=rlc*lam+eqval*(ce-pra*mask+ob)
         opened.append((pp,m))
     if is_derived(zero['point_and_eval'][1]):
@@ -289,6 +295,10 @@ def public_bindings(c,meta,pv):
     constants=''.join(int(x).to_bytes(4,'big').hex() for row in meta['poseidon_constants'][:28] for x in row)
     digest=c.emit(18,inputs[0].i&0x0fffffff,len(inputs),constants,count=8)
     for i in range(8):c.equal(Ref(c,digest.i+i),pv[b['digest_offset']+i])
+
+def height_bits(s,chip):
+    # global_balance asserts the opened degree bits equal these constants.
+    height=s['chip_heights'][chip['name']];return [(height>>(22-i))&1 for i in range(23)]
 
 def global_balance(c,meta,s):
     # The supported shrink machine has only local lookup buses. Requiring the native
@@ -331,34 +341,44 @@ def branching(c,start,end,zrow,zindex):
 def is_power_interval(start,end):
     height=end-start;return height>0 and height&(height-1)==0 and start%height==0
 
-def eq_bits(c,value,vars,cuts):
-    """EQ(bits_be(value,len(vars)), vars) with 0/1 constants folded. Each bit
-    segment between cuts is a most-significant-first product chain, and the
+def eq_bits(c,value,vars,plan):
+    """EQ(bits_be(value,len(vars)), vars) with 0/1 constants folded. Each segment
+    of the plan is a product chain over its bit positions in order, and the
     segments are multiplied left to right, so the compiler's operation cache
-    shares every common prefix across columns."""
+    shares every common prefix across the values that use the same plan."""
     n=len(vars);bits=[(value>>(n-1-j))&1 for j in range(n)]
-    def chain(lo,hi):
+    def chain(positions):
         acc=c.ref(1)
-        for j in range(lo,hi):acc=acc*(vars[j] if bits[j] else 1-vars[j])
+        for j in positions:acc=acc*(vars[j] if bits[j] else 1-vars[j])
         return acc
-    parts=[chain(a,b) for a,b in zip(cuts,cuts[1:])]
+    parts=[chain(segment) for segment in plan]
     return reduce(lambda acc,part:acc*part,parts[1:],parts[0])
 
-def eq_bit_cuts(values,n,max_segments=3):
-    """Choose segment cuts minimizing the distinct products eq_bits emits for
-    these constant values: trie nodes per segment plus partial combinations."""
-    from itertools import combinations
-    def field(v,a,b):return (v>>(n-b))&((1<<(b-a))-1)
-    def cost(cuts):
-        total=0
-        for vals in values:
-            for a,b in zip(cuts,cuts[1:]):
-                total+=sum(len({field(v,a,a+d) for v in vals}) for d in range(1,b-a+1))
-            for i in range(2,len(cuts)):
-                total+=len({tuple(field(v,cuts[j],cuts[j+1]) for j in range(i)) for v in vals})
-        return total
-    options=[(0,)+inner+(n,) for k in range(max_segments) for inner in combinations(range(1,n),k)]
-    return min(options,key=lambda cuts:(cost(cuts),cuts))
+def eq_bit_plan(values,n):
+    """Bit order and segmentation minimizing the distinct products eq_bits emits
+    for these constant values. Bits are ordered greedily by how few distinct
+    prefixes they create; an exact dynamic program then picks the segments."""
+    values=sorted(set(values))
+    def bit(v,j):return (v>>(n-1-j))&1
+    order=[];keys=[()]*len(values);left=list(range(n))
+    while left:
+        j=min(left,key=lambda j:(len({k+(bit(v,j),) for k,v in zip(keys,values)}),j))
+        keys=[k+(bit(v,j),) for k,v in zip(keys,values)];order.append(j);left.remove(j)
+    # distinct[a][b]: distinct patterns of order[a:b] across the values.
+    distinct=[[0]*(n+1) for _ in range(n+1)]
+    for a in range(n):
+        for b in range(a+1,n+1):distinct[a][b]=len({tuple(bit(v,j) for j in order[a:b]) for v in values})
+    def segment(a,b):return sum(distinct[a][d] for d in range(a+1,b+1))
+    # best[b]: cheapest plan for order[:b] as (cost, cuts); a later segment
+    # adds its own chain plus one combination per distinct prefix at its end.
+    best={0:(0,[0])}
+    for b in range(1,n+1):
+        options=[(segment(0,b),[0,b])]
+        for a in range(1,b):
+            cost,cuts=best[a];options.append((cost+segment(a,b)+distinct[0][b],cuts+[b]))
+        best[b]=min(options)
+    cuts=best[n][1]
+    return [order[a:b] for a,b in zip(cuts,cuts[1:])]
 
 def branching_program(c,zrow,zindex,first,second):
     """Ziren's BranchingProgram::eval at field points (big-endian inputs)."""
@@ -388,8 +408,8 @@ def jagged_eval(c,je,offsets,w,zrow,zindex):
     last=offsets[-1];half=(last-1).bit_length()+1 if last>1 else 1
     point,final=sumcheck(c,je,2);assert len(point)==2*half
     first,second=point[:half],point[half:]
-    cuts=eq_bit_cuts((offsets[:-1],offsets[1:]),half)
-    total=sum((wc*eq_bits(c,lo,first,cuts)*eq_bits(c,hi,second,cuts)
+    first_plan=eq_bit_plan(offsets[:-1],half);second_plan=eq_bit_plan(offsets[1:],half)
+    total=sum((wc*eq_bits(c,lo,first,first_plan)*eq_bits(c,hi,second,second_plan)
                for wc,lo,hi in zip(w,offsets,offsets[1:])),c.ref(0))
     c.equal(final,total*branching_program(c,zrow,zindex,first,second))
     return claimed
