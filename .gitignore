@@ -1,0 +1,14 @@
+# Generated proof, compiler, benchmark and diagnostic artifacts stay external.
+__pycache__/
+*.py[cod]
+.venv/
+target/
+out/
+cache/
+broadcast/
+artifacts/
+*.log
+*.bin
+.env
+.env.*
+.fleet.token

@@ -1,0 +1,40 @@
+name: Source checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check Python syntax and shared Ziren pin
+        run: |
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          for path in [*Path('scripts').glob('*.py'), *Path('contracts').rglob('*.py')]:
+              ast.parse(path.read_text(), filename=str(path))
+          PY
+          python3 scripts/check-dependencies.py
+      - name: Reference compiler arithmetic checks
+        run: PYTHONDONTWRITEBYTECODE=1 python3 contracts/ziren-shrink-verifier/test-compiler.py
+
+  shrink-export:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/zkop-shrink-target
+      GOPROXY: https://proxy.golang.org,https://goproxy.cn,direct
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-17
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked -p zkop-shrink-export --lib
+      - run: cargo check --locked -p zkop-shrink-export --features machine --tests
