@@ -290,10 +290,14 @@ def public_bindings(c,meta,pv):
         for i,x in enumerate(b[key]):c.equal(pv[b[off]+i],x)
     c.equal(pv[b['complete_offset']],1);c.equal(pv[b['execution_offset']],1);c.equal(pv[b['exit_offset']],0)
     for i in range(32):c.emit(17,pv[b['committed_offset']+i].i,i,count=0)
-    inputs=pv[:b['hash_inputs']]
-    assert [x.i for x in inputs]==list(range(inputs[0].i,inputs[0].i+len(inputs))) and inputs[0].i&0x40000000
+    # The shrink AIR constrains only the committed digest, so recomputing it is
+    # what binds every public value above. The compact shrink commits the root
+    # digest: Poseidon2 over the application key, committed-value digest, exit
+    # code and recursion root, in the exporter's order.
+    inputs=[pv[i] for i in b['digest_inputs']]
+    assert inputs and all(x.i&0x40000000 for x in inputs)
     constants=''.join(int(x).to_bytes(4,'big').hex() for row in meta['poseidon_constants'][:28] for x in row)
-    digest=c.emit(18,inputs[0].i&0x0fffffff,len(inputs),constants,count=8)
+    digest=c.emit(18,[x.i&0x0fffffff for x in inputs],constants,count=8)
     for i in range(8):c.equal(Ref(c,digest.i+i),pv[b['digest_offset']+i])
 
 def height_bits(s,chip):
@@ -551,7 +555,11 @@ def binary_program(ops,registers,meta,whir):
         elif code==14:n(args[0],1);n(args[1])
         elif code==15:n(args[0],32)
         elif code==17:n(args[0]);n(args[1],1)
-        elif code==18:n(args[0]);n(args[1],2);out.extend(bytes.fromhex(args[2]))
+        elif code==18:
+            # Poseidon2 over listed packet fields: BE16 count, BE32 field indices, round constants.
+            n(len(args[0]),2)
+            for index in args[0]:n(index)
+            out.extend(bytes.fromhex(args[1]))
         else:raise ValueError(op)
     n(255,1);n(len(whir));out.extend(whir)
     return out

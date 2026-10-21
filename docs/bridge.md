@@ -86,6 +86,12 @@ OPSuccinct owns the [exporter](../crates/shrink-export/) and
 [Solidity verifier](../contracts/ziren-shrink-verifier/). Proof encoding,
 hash-suite and deployment details are documented with the verifier.
 
+The shrink AIR constrains only the Poseidon2 digest of its public values. The
+compact shrink is terminal and commits the root digest, as Ziren's Groth16/PLONK
+wrap does: it covers the application key, the committed-value digest, the exit
+code and the recursion root. The on-chain verifier recomputes it, so the expected
+output digest the adapter supplies is bound through it.
+
 ## Ethereum finalization and bridge changes
 
 The inspected [SCC](https://github.com/MetisProtocol/mvm/blob/61ef7e9a9a1f404505279e1d86f2c26a885bcc86/packages/contracts/contracts/MVM/MVM_StateCommitmentChain.sol)

@@ -70,6 +70,11 @@ cargo run --release -p opsuccinct-shrink-export --features machine --example exp
   /outside/repos/shrink-proof --derived
 ```
 
+A shrink proof embeds the wrap program of the Ziren revision that produced it.
+After the Ziren pin changes, run `shrink` again from the compressed proof; a
+`replay` of an older `shrink.bin` fails native verification once the wrap
+program, key or committed digest differs.
+
 `verify-packet <fixture> <packet> --derived` decodes any profile packet against
 the fixture's geometry and runs Ziren's native verifier on it, which is useful
 when comparing on-chain and native acceptance of a modified proof.
@@ -115,3 +120,19 @@ still runs. Accept a successful receipt and verifier result; this command does
 not promise every proof configuration fits Ethereum's limits. With independent
 component/checkpoint vectors, run `native/run-tests.py` and omit that diagnostic
 flag for additional differential checks.
+
+The fixture-backed Foundry tests (`ShrinkReferenceVerifierTest`,
+`OptimizedKernelsTest`) read `WIRE_FIXTURE` and, for the kernels, `NATIVE_BUILD`.
+The committed `foundry.toml` grants no file access, so run them from a scratch
+Foundry root that links `src` and `test` and adds read access to those external
+directories:
+
+```sh
+mkdir -p /outside/repos/forge-root && cd /outside/repos/forge-root
+ln -s /path/to/OPSuccinct/contracts/ziren-shrink-verifier/src src
+ln -s /path/to/OPSuccinct/contracts/ziren-shrink-verifier/test test
+sed 's#fs_permissions = \[\]#fs_permissions = [{ access = "read", path = "/outside/repos" }]#' \
+  /path/to/OPSuccinct/contracts/ziren-shrink-verifier/foundry.toml > foundry.toml
+WIRE_FIXTURE=/outside/repos/shrink-proof NATIVE_BUILD=/outside/repos/verifier-build \
+  forge test --root . --match-contract 'ShrinkReferenceVerifierTest|OptimizedKernelsTest'
+```

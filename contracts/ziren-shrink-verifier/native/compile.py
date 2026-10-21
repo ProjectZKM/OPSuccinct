@@ -1644,11 +1644,12 @@ class Compiler:
         self.program_hash = kh(source_program)
         self.pcs = []
         pc = 48
-        sizes = {4:13,5:13,6:13,7:9,8:9,10:5,11:5,12:5,13:5,14:6,15:37,16:9,17:6,18:1803,20:13,21:13,22:13,23:13}
+        sizes = {4:13,5:13,6:13,7:9,8:9,10:5,11:5,12:5,13:5,14:6,15:37,16:9,17:6,20:13,21:13,22:13,23:13}
         for op in self.ops:
             assert source_program[pc] == op[0], ('opcode mismatch',pc,op[0])
             self.pcs.append(pc)
-            pc += sizes[op[0]]
+            # Poseidon2 lists its field inputs: opcode, dst, BE16 count, 4 bytes per input, constants.
+            pc += 1+4+2+4*len(op[2])+1792 if op[0] == 18 else sizes[op[0]]
         assert source_program[pc] == 255
         size=int.from_bytes(source_program[pc+1:pc+5],'big')
         self.tail=source_program[pc+5:]
@@ -1992,7 +1993,7 @@ class Compiler:
         """Coalesce only adjacent, contiguous, already validated proof bytes."""
         first=None;next_field=None;count=0
         for op,_,*args in self.ops[start:end]:
-            if (op,args[0]&0xf0000000 if args else 0) not in ((10,0x40000000),(11,0x20000000)):break
+            if op not in (10,11) or (op,args[0]&0xf0000000) not in ((10,0x40000000),(11,0x20000000)):break
             self.ref(args[0])
             index=args[0]&0x0fffffff
             if next_field is not None and index!=next_field:break
@@ -2088,7 +2089,8 @@ class Compiler:
         # pointer for the response, so solc can retain the guard and reserve
         # stack-spill memory between the workspace and that response. An unused
         # free pointer gets optimized away and disables stack-to-memory moves.
-        guard = max(t+288,0xab40 if poseidons else 256)
+        # A Poseidon kernel stages its listed inputs at 0xab40 below the guard.
+        guard = max(t+288,0xab40+32*len(poseidons[0][2]) if poseidons else 256)
         inverse_ops=[(i,op[2]) for i,op in enumerate(self.ops[start:end],start)
                      if op[0]==7 and op[2]&0xf0000000==0x20000000]
         if not getattr(self,'batch_inverse',False) or len(inverse_ops)<4:inverse_ops=[]
@@ -2200,16 +2202,20 @@ class Compiler:
                 output_at = self.registers*32+288
                 code.append(f'eqCheck({self.pcs[i]},{ref(args[0])},byte({args[1]},calldataload({output_at})))')
             elif op == 18:
-                first,count,_ = args
-                assert first+count <= self.meta['field_count'] and dst+7 < self.registers
+                indices,_ = args
+                assert indices and all(0 <= x < self.meta['field_count'] for x in indices) and dst+7 < self.registers
                 diag = re.search(r'hex"([0-9a-f]+)"', (ROOT/'src/KoalaBearPoseidon2.sol').read_text())[1]
                 if not fast_poseidon:
                     code += ['codecopy(0xa400,dataoffset("poseidon"),1792)',f'mstore(0xab00,0x{diag[:64]})',f'mstore(0xab20,0x{diag[64:]})']
+                # Stage the listed fields at 0xab40 (below the kernel guard), then
+                # absorb them in one loop: an overwrite-mode sponge replaces the
+                # leading state words with each block of up to 8 inputs.
+                code += [f'mstore({0xab40+32*j},le32(calldataload({self.packet+38+4*x})))' for j,x in enumerate(indices)]
                 code += ['for { let j := 0 } lt(j,512) { j := add(j,32) } { mstore(add(0xa000,j),0) }',
-                         f'''for {{ let at := 0 }} lt(at,{count}) {{ at := add(at,8) }} {{
-                           let n := sub({count},at) if gt(n,8) {{ n := 8 }}
+                         f'''for {{ let at := 0 }} lt(at,{len(indices)}) {{ at := add(at,8) }} {{
+                           let n := sub({len(indices)},at) if gt(n,8) {{ n := 8 }}
                            for {{ let j := 0 }} lt(j,n) {{ j := add(j,1) }} {{
-                             mstore(add(0xa000,mul(j,32)),le32(calldataload(add({self.packet+38+4*first},mul(add(at,j),4)))))
+                             mstore(add(0xa000,mul(j,32)),mload(add(0xab40,mul(add(at,j),32))))
                            }}
                            permute(0xa000,0xa200,0xa400,0xab00)
                          }}''']

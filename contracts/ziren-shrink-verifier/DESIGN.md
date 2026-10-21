@@ -11,10 +11,14 @@ parameters, child profile and canonical key geometry. Application key, recursion
 root, complete successful execution and every public-output digest byte must
 remain bound through native export and on-chain verification. The shrink AIR's
 public-values chip constrains only the eight Poseidon2 digest elements; every
-other public value, including the recursion root, application key, flags and
-output digest, is bound to the proof solely by recomputing that Poseidon2 digest.
-The verifier therefore keeps the Poseidon2 hash, as Ziren's native verifier
-does; a byte-hash suite cannot replace it. A submitted proof
+other public value is bound to the proof solely by recomputing that digest. The
+compact shrink is terminal, so its wrap program commits the root digest, as the
+Groth16/PLONK wrap does: Poseidon2 over the application key, committed-value
+digest, exit code and recursion root (49 elements, 7 permutations instead of
+28 for the full reduce digest). The circuit still checks the child's full
+digest and completeness, including the execution-shard flag. The verifier
+recomputes the root digest, as Ziren's `verify_shrink_with` does; the recursion
+circuit has no byte-hash gadget, so the suite hash cannot replace it. A submitted proof
 cannot choose its key, verifier program or approved module addresses.
 
 ## Export, encoding and compilation
@@ -23,6 +27,9 @@ cannot choose its key, verifier program or approved module addresses.
 `machine.json`, `marker.json` and `marker_shift.json`. The compiler specializes
 fixed metadata and AIR while retaining proof values as runtime inputs. Unsupported
 AIR or suites reject. Marker values identify inputs; they are not proof witnesses.
+The metadata lists the root-digest input positions (`digest_inputs`); the
+Poseidon2 program operation carries that explicit field list rather than a
+contiguous range.
 
 The separate `wire::Profile` codec pins shape and canonical field/hash traversal.
 Its Raw/Shared/Dag modes preserve the full proof. The generated entry also supports
@@ -34,6 +41,7 @@ the directory rename; approved profiles still depend on the key descriptor.
 ## On-chain execution
 
 The entry validates packet/profile/canonicality, binds the expected output,
+recomputes the root public-values digest and compares it with the committed one,
 executes every authenticated kernel, propagates the live transcript and verifies
 the complete WHIR tail: commitments, Merkle paths, grinding, sumchecks, OOD
 relations and final polynomial identities. Transport or arithmetic helpers do

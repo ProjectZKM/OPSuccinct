@@ -366,11 +366,11 @@ contract ShrinkReferenceVerifier {
                     e.regs[dst + i] = x % F.P;
                 }
             } else if (op == 18) {
-                uint256 first = n(r, 4);
+                // Poseidon2 over the listed packet fields (the root digest inputs).
                 uint256 count = n(r, 2);
                 uint256[] memory input = new uint256[](count);
                 for (uint256 i; i < count; ++i) {
-                    input[i] = field(e, first + i);
+                    input[i] = field(e, n(r, 4));
                 }
                 uint256[] memory digest = Poseidon2.hash(input, r.data, r.at);
                 r.at += 28 * 16 * 4;

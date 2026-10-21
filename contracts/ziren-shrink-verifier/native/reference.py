@@ -140,8 +140,8 @@ class Reference:
                 self.regs[dst:dst+8]=[int.from_bytes(digest[i:i+4],'little')%P for i in range(0,32,4)]
             elif code==17:assert self.get(args[0])==self.output[args[1]],('output',index)
             elif code==18:
-                first,count,_=args
-                self.regs[dst:dst+8]=poseidon(self.fields[first:first+count],self.meta['poseidon_constants'])
+                indices,_=args
+                self.regs[dst:dst+8]=poseidon([self.fields[i] for i in indices],self.meta['poseidon_constants'])
             else:raise ValueError(('opcode',code))
             if v is not None:self.regs[dst]=v
 

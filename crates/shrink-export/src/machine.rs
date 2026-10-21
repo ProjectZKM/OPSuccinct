@@ -261,7 +261,12 @@ pub fn export(
     let app_digest = app.hash_koalabear();
     let metadata = json!({"suite":"keccak256-v1","profile_id":hash(&profile.id()),"field_count":profile.field_count,"hash_count":profile.digest_references,"derived_sumchecks":derived_sumchecks,"chips":chips,
   "vk":{"root":hash(&vk.commit.roots()[0]),"pc_start":vk.pc_start.as_canonical_u32(),"global":canonical(&vk.initial_global_cumulative_sum.0.x.0).into_iter().chain(canonical(&vk.initial_global_cumulative_sum.0.y.0)).collect::<Vec<_>>(),"prep":vk.chip_information.iter().map(|(n,_,(w,h))|json!([n,w,h])).collect::<Vec<_>>()},
-  "public_binding":{"application":canonical(&app_digest),"recursion_root":canonical(&prover.recursion_vk_root),"application_offset":pv.zkm_vk_digest[0],"root_offset":pv.vk_root[0],"complete_offset":pv.is_complete,"execution_offset":pv.contains_execution_shard,"exit_offset":pv.exit_code,"committed_offset":pv.committed_value_digest[0].0[0],"digest_offset":pv.digest[0],"hash_inputs":zkm_recursion_core::air::NUM_PV_ELMS_TO_HASH},
+  "public_binding":{"application":canonical(&app_digest),"recursion_root":canonical(&prover.recursion_vk_root),"application_offset":pv.zkm_vk_digest[0],"root_offset":pv.vk_root[0],"complete_offset":pv.is_complete,"execution_offset":pv.contains_execution_shard,"exit_offset":pv.exit_code,"committed_offset":pv.committed_value_digest[0].0[0],"digest_offset":pv.digest[0],
+    // The compact shrink commits the root digest: Poseidon2 over these
+    // public-value positions, in this order (Ziren `root_public_values_digest`).
+    "digest_inputs":pv.zkm_vk_digest.iter().copied()
+        .chain(pv.committed_value_digest.iter().flat_map(|w| w.0.iter().copied()))
+        .chain(std::iter::once(pv.exit_code)).chain(pv.vk_root.iter().copied()).collect::<Vec<_>>()},
   "gkr_grinding_bits":zkm_pcs::logup_gkr::gkr_grinding_bits(),
   "whir_config":zkm_pcs::whir::jagged::whir_config_for_profile(zkm_pcs::whir::jagged::WhirProfile::CompactShrink,21),
   "poseidon_constants":zkm_primitives::RC_16_30.iter().map(|r|canonical(r)).collect::<Vec<_>>()});

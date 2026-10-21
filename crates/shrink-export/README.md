@@ -8,7 +8,8 @@ exporter dependency.
 shape/key. Decoding must be followed by full native verification. With the
 `machine` feature, `machine::export` first verifies the reference against approved
 `ShrinkVerifierData`, application key and public values, then emits fixed machine
-metadata and markers. Unsupported AIR fails export. A submission cannot authorize
+metadata and markers, including the public-value positions of the root digest
+that the compact shrink commits. Unsupported AIR fails export. A submission cannot authorize
 its own verifier key, geometry or program.
 
 The Solidity backend and compiler live in [ziren-shrink-verifier](../../contracts/ziren-shrink-verifier/).

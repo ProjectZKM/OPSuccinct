@@ -79,7 +79,7 @@ class CompilerTests(unittest.TestCase):
 def vectors(fixture):
     meta=json.loads((fixture/'machine/machine.json').read_text())
     rng=random.Random(13121);out=[]
-    for length in (0,1,7,8,9,16,223,224):
+    for length in (0,1,7,8,9,16,49,223,224):
         values=[rng.randrange(P) for _ in range(length)]
         answer=m.poseidon(Numeric(),[E(v) for v in values],meta['poseidon_constants'])
         out.append({'input':values,'digest':[x.v[0] for x in answer]})

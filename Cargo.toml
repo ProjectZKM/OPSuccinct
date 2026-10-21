@@ -12,12 +12,12 @@ repository = "https://github.com/ProjectZKM/OPSuccinct"
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc", "rc"] }
 serde_json = "1"
 anyhow = "1"
-zkm-pcs = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "41449f2f8187c0b170ecd894087a6ba938db691b" }
-zkm-prover = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "41449f2f8187c0b170ecd894087a6ba938db691b" }
-zkm-core-machine = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "41449f2f8187c0b170ecd894087a6ba938db691b" }
-zkm-core-executor = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "41449f2f8187c0b170ecd894087a6ba938db691b" }
-zkm-recursion-core = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "41449f2f8187c0b170ecd894087a6ba938db691b" }
-zkm-primitives = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "41449f2f8187c0b170ecd894087a6ba938db691b" }
+zkm-pcs = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "82ceeae13222fcf8cd7532e516108a5ab71fe28d" }
+zkm-prover = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "82ceeae13222fcf8cd7532e516108a5ab71fe28d" }
+zkm-core-machine = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "82ceeae13222fcf8cd7532e516108a5ab71fe28d" }
+zkm-core-executor = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "82ceeae13222fcf8cd7532e516108a5ab71fe28d" }
+zkm-recursion-core = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "82ceeae13222fcf8cd7532e516108a5ab71fe28d" }
+zkm-primitives = { git = "https://github.com/ProjectZKM/Ziren.git", rev = "82ceeae13222fcf8cd7532e516108a5ab71fe28d" }
 p3-field = { git = "https://github.com/ProjectZKM/Plonky3", rev = "4dd0d47a8176503fbaa7293c9f0e3b20004e16b2" }
 p3-keccak = { git = "https://github.com/ProjectZKM/Plonky3", rev = "4dd0d47a8176503fbaa7293c9f0e3b20004e16b2" }
 p3-symmetric = { git = "https://github.com/ProjectZKM/Plonky3", rev = "4dd0d47a8176503fbaa7293c9f0e3b20004e16b2" }
