@@ -13,8 +13,8 @@ python3 -m pip install -r contracts/ziren-shrink-verifier/native/requirements.in
 export PYTHONDONTWRITEBYTECODE=1
 export CARGO_TARGET_DIR=/outside/repos/opsuccinct-target
 python3 scripts/check-dependencies.py
-cargo test --locked -p zkop-shrink-export --lib
-cargo check --locked -p zkop-shrink-export --features machine --tests
+cargo test --locked -p opsuccinct-shrink-export --lib
+cargo check --locked -p opsuccinct-shrink-export --features machine --tests
 ```
 
 Cargo supplies Ziren directly. The guest/bridge integration is described in
@@ -23,11 +23,11 @@ Cargo supplies Ziren directly. The guest/bridge integration is described in
 ## Prove and export
 
 Execute your guest and compress its proof with Ziren. In the guest host, enable
-`zkop-shrink-export`'s `machine` feature and export the shrink proof:
+`opsuccinct-shrink-export`'s `machine` feature and export the shrink proof:
 
 ```rust,ignore
 use zkm_prover::{CompactShrink, Keccak256Suite};
-use zkop_shrink_export::{machine, wire::{Mode, Profile}};
+use opsuccinct_shrink_export::{machine, wire::{Mode, Profile}};
 
 let shrink = prover.shrink_with::<CompactShrink<Keccak256Suite>>(compressed, opts)?;
 let work = std::path::Path::new("/outside/repos/shrink-proof");

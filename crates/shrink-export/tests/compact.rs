@@ -1,6 +1,7 @@
 //! Explicit full proving gate using the normal current-version admitted keys.
 #![cfg(feature = "machine")]
 
+use opsuccinct_shrink_export::wire::{Mode, Profile};
 use p3_field::PrimeCharacteristicRing;
 use p3_koala_bear::KoalaBear;
 use zkm_core_executor::ZKMContext;
@@ -11,7 +12,6 @@ use zkm_pcs::{
 };
 use zkm_primitives::io::ZKMPublicValues;
 use zkm_prover::{components::DefaultProverComponents, ZKMProver};
-use zkop_shrink_export::wire::{Mode, Profile};
 
 #[test]
 #[ignore = "full production core/compress/shrink proving and key-admission gate"]

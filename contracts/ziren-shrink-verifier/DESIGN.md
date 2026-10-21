@@ -14,7 +14,7 @@ cannot choose its key, verifier program or approved module addresses.
 
 ## Export, encoding and compilation
 
-`zkop_shrink_export::machine::export` verifies an approved reference and emits
+`opsuccinct_shrink_export::machine::export` verifies an approved reference and emits
 `machine.json`, `marker.json` and `marker_shift.json`. The compiler specializes
 fixed metadata and AIR while retaining proof values as runtime inputs. Unsupported
 AIR or suites reject. Marker values identify inputs; they are not proof witnesses.

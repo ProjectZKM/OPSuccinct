@@ -28,7 +28,7 @@ jobs:
   shrink-export:
     runs-on: ubuntu-latest
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/zkop-shrink-target
+      CARGO_TARGET_DIR: ${{ runner.temp }}/opsuccinct-shrink-target
       GOPROXY: https://proxy.golang.org,https://goproxy.cn,direct
     steps:
       - uses: actions/checkout@v4
@@ -36,8 +36,8 @@ jobs:
         with:
           toolchain: nightly-2026-09-17
       - run: cargo fmt --all -- --check
-      - run: cargo test --locked -p zkop-shrink-export --lib
-      - run: cargo check --locked -p zkop-shrink-export --features machine --tests
+      - run: cargo test --locked -p opsuccinct-shrink-export --lib
+      - run: cargo check --locked -p opsuccinct-shrink-export --features machine --tests
 
   solidity:
     runs-on: ubuntu-latest
