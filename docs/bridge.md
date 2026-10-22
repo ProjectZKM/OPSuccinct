@@ -1,7 +1,8 @@
 # Metis bridge protocol proposal
 
 This proposal adds proof-based finality to the canonical Metis bridge.
-The guest and settlement contracts below remain to be implemented.
+The [output oracle](../contracts/metis-output-oracle/) is implemented; the
+guest and the SCC and messenger upgrades below remain to be implemented.
 
 ## Proof and withdrawal flow
 
@@ -27,15 +28,17 @@ withdrawal message proof serve separate checks.
 
 ## Statement and guest
 
-The canonical, versioned public statement must bind:
+The public statement is the oracle's
+[`MetisAggregationOutputs`](../contracts/metis-output-oracle/README.md#public-values).
+It must bind:
 
-| Commitment | Required fields |
-| --- | --- |
-| Deployment | Protocol domain, L1/L2 chain IDs, guest/rules/configuration version |
-| Predecessor | Accepted parent claim and starting state |
-| Range | Start/end heights, exact count and the ordered per-block state roots as the `Lib_MerkleTree` batch root |
-| Canonical batch | Chain ID, batch index and SCC header hash |
-| Inputs | Approved Ethereum anchor, ordered DA/batch data and enqueue commitments |
+| Commitment | Required fields | Bound by |
+| --- | --- | --- |
+| Deployment | Guest/rules/configuration version, L1/L2 chains | Verifier entry (guest key), `rollupConfigHash`, `l2ChainId`, `l1Head` |
+| Predecessor | Accepted parent claim and starting state | `l2PreBatchHeaderHash`; the guest proves its start root is that batch's last element |
+| Range | Start/end heights, exact count and the ordered per-block state roots as the `Lib_MerkleTree` batch root | `prevTotalElements`, `batchSize` and `batchRoot` inside each header hash |
+| Canonical batch | Chain ID, batch index and SCC header hash | `startBatchIndex`, `endBatchIndex`, `batchHeaderHashesCommitment` |
+| Inputs | Approved Ethereum anchor, ordered DA/batch data and enqueue commitments | `l1Head`; the guest authenticates the rest against it |
 
 The messenger proves each withdrawal against one state-root element of the
 batch, so the statement must commit to every root in order, not only the final
@@ -107,8 +110,9 @@ Ethereum block 26240087, on a local Osaka Anvil node that enforces the
 
 The proof geometry does not depend on the Metis batch, so verification cost is
 per proof, not per block. The output oracle's statement checks and proven-batch
-write must fit in the remaining 3,109,177 gas under the cap, because the proof
-is verified in the same transaction that records the batch as proven. Rerun the
+writes must fit in the remaining 3,109,177 gas under the cap, because the proof
+is verified in the same transaction that records the batches as proven. Proving
+the maximum 64 batches costs the oracle about 1.6M gas in its tests. Rerun the
 measurement for every approved build.
 
 ## Ethereum finalization and bridge changes
@@ -119,23 +123,27 @@ currently combines SCC membership, fraud-window/dispute gates and a separate
 message-passer account/storage proof. The proposal changes state finality while
 preserving message proofs, sender authentication, escrow and replay protection.
 
-1. `MetisOPSuccinctL2OutputOracle` (proposed; not yet implemented), named
-   after OP Succinct's `OPSuccinctL2OutputOracle`, checks the statement's
-   domain, approved L1 anchor, canonical candidate, exact range/configuration
-   and accepted predecessor.
+1. [`MetisOPSuccinctL2OutputOracle`](../contracts/metis-output-oracle/src/MetisOPSuccinctL2OutputOracle.sol),
+   named after OP Succinct's `OPSuccinctL2OutputOracle`, reads the canonical
+   header hashes from the SCC and checks the approved L1 anchor, configuration,
+   contiguous range and accepted predecessor.
    The anchor must be an ancestor of the verifying block: `blockhash` within
    the 256-block window, or a hash checkpointed earlier on L1 as OP Succinct's
    `checkpointBlockHash` does. A proof against any other anchor is rejected.
 2. It computes the expected output digest, calls the approved complete verifier
-   and atomically records `(chainId, batchIndex, batchHeaderHash)` as proven.
-   The SCC header hash alone does not bind chain ID and batch index.
-3. A chain-aware finality accessor lets the messenger require canonical membership
-   and proof finality for post-cutover batches, together with the existing message
-   proof and relay checks. Preserve other chains' behavior explicitly.
+   and atomically records each batch's header hash by index, in an oracle bound
+   to one chain ID. The SCC header hash alone does not bind chain ID and batch
+   index.
+3. The messenger requires `isProven(header)` with SCC membership for batches
+   after the oracle's `startingBatchIndex`, together with the existing message
+   proof and relay checks (not yet implemented). Preserve other chains' behavior
+   explicitly.
 4. Legacy batches keep their existing rules. Snapshot the accepted prefix and
    resolve pending/disputed ancestors before activation; do not globally zero the
    fraud window or permit time-only acceptance of new batches.
-5. Proven batches and their ancestors cannot be deleted or truncated. An authorized
+5. Proven batches and their ancestors cannot be deleted or truncated: the SCC's
+   `deleteStateBatchByChainId` must reject indexes at or below the oracle's
+   `latestBatchIndex` (not yet implemented). An authorized
    invalid-candidate reset must preserve the proven prefix and prevent descendants
    from finalizing across a gap.
 6. Proof-only finality halts every withdrawal when no approved configuration can
