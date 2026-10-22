@@ -1,0 +1,138 @@
+# Reproduce with Ziren and the Solidity verifier
+
+Use Python 3.11+, solc 0.8.30, Foundry and the Rust/guest toolchains required by
+the pinned Ziren revision. Run commands from OPSuccinct. Keep proof, build and deployment
+outputs outside the repository.
+
+## Setup
+
+```sh
+python3 -m venv /outside/repos/opsuccinct-venv
+. /outside/repos/opsuccinct-venv/bin/activate
+python3 -m pip install -r contracts/ziren-shrink-verifier/native/requirements.in
+export PYTHONDONTWRITEBYTECODE=1
+export CARGO_TARGET_DIR=/outside/repos/opsuccinct-target
+python3 scripts/check-dependencies.py
+cargo test --locked -p ziren-shrink-export --lib
+cargo check --locked -p ziren-shrink-export --features machine --tests
+```
+
+Cargo supplies Ziren directly. The guest/bridge integration is described in
+[bridge.md](bridge.md).
+
+## Prove and export
+
+Execute your guest and compress its proof with Ziren. In the guest host, enable
+`ziren-shrink-export`'s `machine` feature and export the shrink proof:
+
+```rust,ignore
+use zkm_prover::{CompactShrink, Keccak256Suite};
+use ziren_shrink_export::{machine, wire::{Mode, Profile}};
+
+let shrink = prover.shrink_with::<CompactShrink<Keccak256Suite>>(compressed, opts)?;
+let work = std::path::Path::new("/outside/repos/shrink-proof");
+machine::export(
+    &work.join("machine"), &prover, &shrink, &application_vk,
+    &approved_verifier_data, &public_values, derived,
+)?;
+let profile = Profile::from_trusted_proof(&shrink.vk, &shrink.proof, Mode::Raw, derived)?;
+std::fs::write(work.join("raw.bin"), profile.encode(&shrink.proof)?)?;
+let statement = serde_json::json!({
+    "output_digest": format!("0x{}", hex::encode(public_values.hash()))
+});
+std::fs::write(work.join("statement.json"), serde_json::to_vec(&statement)?)?;
+```
+
+The verifier data, application key and public values must come from your approved
+setup/statement. Machine export fully verifies the reference before emitting its
+metadata and markers. `Mode::Raw` with the same `derived` flag matches that export.
+With `derived = true` the wire omits every sumcheck polynomial's linear
+coefficient and final evaluation, and the jagged PCS claims that repeat the
+zerocheck openings. The verifier reconstructs them, which is the cheaper encoding.
+
+The `export_fixture` example in `crates/ziren-shrink-export` runs this sequence. It
+derives the verifier data from the proof's own key, which suits local
+reproduction only.
+
+```sh
+cargo run --release -p ziren-shrink-export --features machine --example export_fixture -- \
+  prove /path/to/guest.elf /outside/repos/shrink-proof 10 --derived
+```
+
+To check a real Ethereum block, start from a compressed block proof such as an
+EthProofs worker output: its `proof.bin`, its `public_values.bin` and the guest
+`program.elf` it was proven with. The `shrink` mode runs only the compact
+shrink, and `replay` re-exports a saved `shrink.bin` without proving again.
+
+```sh
+cargo run --release -p ziren-shrink-export --features machine --example export_fixture -- \
+  shrink /path/to/proof.bin /path/to/program.elf /path/to/public_values.bin \
+  /outside/repos/shrink-proof --derived
+```
+
+A shrink proof embeds the wrap program of the Ziren revision that produced it.
+After the Ziren pin changes, run `shrink` again from the compressed proof; a
+`replay` of an older `shrink.bin` fails native verification once the wrap
+program, key or committed digest differs.
+
+`verify-packet <fixture> <packet> --derived` decodes any profile packet against
+the fixture's geometry and runs Ziren's native verifier on it, which is useful
+when comparing on-chain and native acceptance of a modified proof.
+
+The shrink proof's geometry does not depend on the guest workload, so one
+profile serves every guest. Only the application key, a constant of the
+compiled program, differs between guests.
+
+## Compile and verify
+
+```sh
+export WIRE_FIXTURE=/outside/repos/shrink-proof
+python3 contracts/ziren-shrink-verifier/compile-machine.py \
+  "$WIRE_FIXTURE/machine" "$WIRE_FIXTURE/compiled"
+cp "$WIRE_FIXTURE/statement.json" "$WIRE_FIXTURE/compiled/statement.json"
+python3 scripts/build-native.py --fixtures "$WIRE_FIXTURE" \
+  --out /outside/repos/verifier-build --solc /path/to/solc-0.8.30
+```
+
+This builds from the exported computation without workload-specific presets.
+The output includes an external `native.json`. On a later build, add
+`--plan /path/to/native.json --fresh` to reproduce its exact boundaries and bytecode.
+
+Start a dedicated local Anvil node:
+
+```sh
+anvil --host 127.0.0.1 --port 18601 --hardfork osaka --enable-tx-gas-limit \
+  --gas-limit 60000000 --no-request-size-limit --silent
+```
+
+In another terminal with the same virtual environment and fixture variable:
+
+```sh
+python3 contracts/ziren-shrink-verifier/native/measure.py \
+  --build /outside/repos/verifier-build --fixtures "$WIRE_FIXTURE" \
+  --rpc http://127.0.0.1:18601 --skip-checkpoints --capped-osaka \
+  --out /outside/repos/verification.json
+```
+
+The helper deploys the modules and submits the complete proof. `--skip-checkpoints`
+omits optional intermediate-vector comparisons; the full on-chain proof check
+still runs. Accept a successful receipt and verifier result; this command does
+not promise every proof configuration fits Ethereum's limits. With independent
+component/checkpoint vectors, run `native/run-tests.py` and omit that diagnostic
+flag for additional differential checks.
+
+The fixture-backed Foundry tests (`ShrinkReferenceVerifierTest`,
+`OptimizedKernelsTest`) read `WIRE_FIXTURE` and, for the kernels, `NATIVE_BUILD`.
+The committed `foundry.toml` grants no file access, so run them from a scratch
+Foundry root that links `src` and `test` and adds read access to those external
+directories:
+
+```sh
+mkdir -p /outside/repos/forge-root && cd /outside/repos/forge-root
+ln -s /path/to/OPSuccinct/contracts/ziren-shrink-verifier/src src
+ln -s /path/to/OPSuccinct/contracts/ziren-shrink-verifier/test test
+sed 's#fs_permissions = \[\]#fs_permissions = [{ access = "read", path = "/outside/repos" }]#' \
+  /path/to/OPSuccinct/contracts/ziren-shrink-verifier/foundry.toml > foundry.toml
+WIRE_FIXTURE=/outside/repos/shrink-proof NATIVE_BUILD=/outside/repos/verifier-build \
+  forge test --root . --match-contract 'ShrinkReferenceVerifierTest|OptimizedKernelsTest'
+```

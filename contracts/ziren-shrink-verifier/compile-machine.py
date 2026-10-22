@@ -1,0 +1,601 @@
+#!/usr/bin/env python3
+"""Compile a trusted, fixed Ziren verifier profile to an EVM reference program.
+
+All runtime arithmetic, transcript samples, assertions and PCS checks must run
+on chain. No off-chain acceptance bit is embedded. Input markers identify wire
+slots; only independently approved geometry/key/AIR data become constants.
+"""
+import argparse
+import json
+import heapq
+from pathlib import Path
+from functools import reduce
+
+P=0x7f000001
+CONST=0x80000000
+def integer(x):return int(x,0) if isinstance(x,str) else x
+def logceil(n):return (max(1,n)-1).bit_length()
+def canonical(m):return m*pow(1<<32,-1,P)%P
+
+class Ref:
+    def __init__(self,c,i):self.c=c;self.i=i
+    def __add__(self,b):return self.c.binary(4,self,b)
+    __radd__=__add__
+    def __sub__(self,b):return self.c.binary(5,self,b)
+    def __rsub__(self,b):return self.c.binary(5,b,self)
+    def __mul__(self,b):return self.c.binary(6,self,b)
+    __rmul__=__mul__
+    def __neg__(self):return 0-self
+    def __truediv__(self,b):return self*self.c.inverse(b)
+    def __bool__(self):raise TypeError("witness-dependent host branching is forbidden")
+
+class Compiler:
+    def __init__(self):self.ops=[];self.regs=0;self.memo={};self.phases=[];self.base=set()
+    def ref(self,x):return x if isinstance(x,Ref) else Ref(self,CONST | (x%P))
+    def emit(self,op,*args,count=1):
+        out=self.regs;self.regs+=count;self.ops.append((op,out,*args))
+        if op in (16,18,20,21,22):self.base.update(range(out,out+count))
+        return Ref(self,out)
+    def cached(self,op,*args):
+        k=(op,*args)
+        if k not in self.memo:self.memo[k]=self.emit(op,*args)
+        return self.memo[k]
+    def binary(self,op,a,b):
+        a=self.ref(a);b=self.ref(b)
+        if a.i&CONST and b.i&CONST:
+            x=a.i&~CONST;y=b.i&~CONST;return self.ref({4:lambda:x+y,5:lambda:x-y,6:lambda:x*y}[op]())
+        if op in (4,6) and a.i>b.i:a,b=b,a
+        if op==4 and a.i==CONST:return b
+        if op==5 and b.i==CONST:return a
+        if op==5 and a.i==b.i:return self.ref(0)
+        if op==6:
+            if a.i==CONST or b.i==CONST:return self.ref(0)
+            if a.i==CONST|1:return b
+            if b.i==CONST|1:return a
+        def base(x):return bool(x.i&CONST or x.i&0x40000000 or x.i in self.base)
+        ab,bb=base(a),base(b)
+        if ab and bb:op={4:20,5:21,6:22}[op]
+        elif op==6 and (ab or bb):
+            op=23
+            if ab:a,b=b,a
+        return self.cached(op,a.i,b.i)
+    def inverse(self,a):
+        a=self.ref(a)
+        if a.i&CONST:return self.ref(pow(a.i&~CONST,-1,P))
+        return self.cached(7,a.i)
+    def equal(self,a,b):
+        a=self.ref(a);b=self.ref(b)
+        if a.i!=b.i:self.emit(8,a.i,b.i,count=0)
+    def observe(self,a,kind=10):self.emit(kind,self.ref(a).i,count=0)
+    def sample(self):return self.emit(13)
+    def grind(self,bits,witness):self.emit(14,bits,self.ref(witness).i,count=0)
+    def phase(self,name):self.phases.append((name,len(self.ops)))
+    def field(self,x):assert isinstance(x,dict) and 'f' in x;return Ref(self,0x40000000|x['f'])
+    def ext(self,x):
+        x=x['value'] if isinstance(x,dict) and 'value' in x else x
+        # A value the decoder derives as zero (such as a padding claim) is a constant.
+        if len(x)==4 and all(v==0 for v in x):return self.ref(0)
+        assert len(x)==4 and [v['f'] for v in x]==list(range(x[0]['f'],x[0]['f']+4))
+        return Ref(self,0x20000000|x[0]['f'])
+    def exts(self,x):return [self.ext(v) for v in x]
+    def hash(self,x):
+        # A MerkleCap serializes as {roots:[hash],_phantom:null}.
+        if isinstance(x,dict) and 'cap' in x:x=x['cap'][0]
+        assert isinstance(x,dict) and 'h' in x,x
+        return Ref(self,0x10000000|x['h'])
+    def constant_hash(self,x):return self.cached(15,integer(x))
+    def seed(self,h):
+        out=self.emit(16,h.i,count=8);return [Ref(self,out.i+i) for i in range(8)]
+    def emit_air(self,desc,main,prep,pv,alpha):
+        values=main+prep+pv
+        def arg(i):return self.ref(i&~CONST) if i&CONST else values[i]
+        for op,a,b in desc['air_ops']:values.append(self.binary([4,5,6][op],arg(a),arg(b)))
+        return reduce(lambda acc,i:acc*alpha+arg(i),desc['air_roots'],self.ref(0))
+
+SUMCHECK_KEYS={'claimed_sum','point_and_eval','univariate_polys'}
+def slot(a,b):
+    return isinstance(a,int) and isinstance(b,int) and a!=b and canonical(b)-canonical(a)==1_000_000
+def ext_mul(a,b):
+    # KoalaBear E4 over X^4-3, lane-wise canonical integers.
+    out=[0]*4
+    for i,x in enumerate(a):
+        for j,y in enumerate(b):
+            k=i+j
+            if k<4:out[k]=(out[k]+x*y)%P
+            else:out[k-4]=(out[k-4]+3*x*y)%P
+    return out
+def ext_of(x):
+    assert isinstance(x,dict) and len(x['value'])==4
+    return [canonical(v) for v in x['value']]
+def derived_sumcheck(a,b):
+    """Layout of a sumcheck whose linear coefficients and final evaluation are
+    omitted from the wire. Both marker files must reproduce the decoder's
+    reconstruction exactly before a slot is accepted as derived."""
+    out={'claimed_sum':layout(a['claimed_sum'],b['claimed_sum']),'univariate_polys':[]}
+    point=layout(a['point_and_eval'][0],b['point_and_eval'][0])
+    claims=[ext_of(a['claimed_sum']),ext_of(b['claimed_sum'])]
+    polys=list(zip(a['univariate_polys'],b['univariate_polys']));assert len(polys)==len(point)>0
+    for i,(pa,pb) in enumerate(polys):
+        ca,cb=pa['coefficients'],pb['coefficients'];assert len(ca)==len(cb)>=2
+        coefficients=[]
+        for j,(x,y) in enumerate(zip(ca,cb)):
+            if j==1:coefficients.append({'derived':'linear'})
+            else:coefficients.append(layout(x,y))
+        alphas=[ext_of(m['point_and_eval'][0][len(point)-1-i]) for m in (a,b)]
+        for m,(c,claim,alpha) in enumerate(zip((ca,cb),claims,alphas)):
+            values=[ext_of(v) for v in c]
+            expected=[(cl-2*c0-sum(rest))%P for cl,c0,rest in zip(claim,values[0],zip(*values[2:]) if len(values)>2 else [()]*4)]
+            assert values[1]==expected,('derived linear coefficient mismatch',i,m)
+            acc=[0]*4
+            for v in reversed(values):acc=[(x+y)%P for x,y in zip(ext_mul(acc,alpha),v)]
+            claims[m]=acc
+        out['univariate_polys'].append({'coefficients':coefficients})
+    for m in (a,b):assert ext_of(m['point_and_eval'][1])==claims[0 if m is a else 1],'derived final evaluation mismatch'
+    out['point_and_eval']=[point,{'derived':'final'}]
+    return out
+
+def layout(a,b):
+    if isinstance(a,dict) and a.keys()==SUMCHECK_KEYS==b.keys():
+        first=a['univariate_polys'][0]['coefficients'][1]['value'][0]
+        if not slot(first,b['univariate_polys'][0]['coefficients'][1]['value'][0]):return derived_sumcheck(a,b)
+    if isinstance(a,list):
+        if len(a)==32 and all(isinstance(v,int) and 0<=v<256 for v in a) and bytes(a[:8])==b'EVMDIGST':
+            assert a==b;return {'h':int.from_bytes(bytes(a[8:12]),'little')}
+        assert len(a)==len(b);return [layout(x,y) for x,y in zip(a,b)]
+    if isinstance(a,dict):
+        if 'Uniform' in a:
+            ua=a['Uniform'];ub=b['Uniform'];assert ua['width']==ub['width'];width=ua['width']
+            fields=layout(ua['values'],ub['values']);assert width>0 and len(fields)%width==0
+            return [fields[i:i+width] for i in range(0,len(fields),width)]
+        assert a.keys()==b.keys();return {k:layout(v,b[k]) for k,v in a.items()}
+    if a!=b:
+        assert isinstance(a,int) and canonical(b)-canonical(a)==1_000_000
+        return {'f':canonical(a)-1}
+    return a
+
+def eq_factor(x,y):
+    # (1-x)(1-y)+xy with one multiplication.
+    xy=x*y;return 1-x-y+xy+xy
+def eq(a,b):
+    assert len(a)==len(b)
+    return reduce(lambda acc,p:acc*eq_factor(*p),zip(a,b),1)
+def table(point):
+    # Each level multiplies once per entry: x*(1-r) is formed as x-x*r.
+    v=[1]
+    for r in point:
+        high=[x*r for x in v];v=[x-h for x,h in zip(v,high)]+high
+    return v
+def mle(values,point):
+    assert len(values)==1<<len(point);v=list(values)
+    for r in point:v=[v[2*i]+r*(v[2*i+1]-v[2*i]) for i in range(len(v)//2)]
+    return v[0]
+def horner(a,x):return reduce(lambda v,c:v*x+c,reversed(a),0)
+def geq(threshold,point):
+    assert len(threshold)==len(point);v=1
+    for x,y in zip(reversed(threshold),reversed(point)):
+        xy=x*y;v=(1-x-y+xy+xy)*v+(y-xy)
+    return v
+def is_derived(x):return isinstance(x,dict) and 'derived' in x
+def sumcheck(c,p,degree):
+    point=c.exts(p['point_and_eval'][0]);claim=c.ext(p['claimed_sum'])
+    polys=p['univariate_polys'];assert len(polys)==len(point) and len(polys)>0
+    for i,entry in enumerate(polys):
+        raw=entry['coefficients'];assert len(raw)==degree+1
+        poly=[None if is_derived(v) else c.ext(v) for v in raw]
+        if poly[1] is None:
+            # The wire omits the linear coefficient; p(0)+p(1)=claim defines it.
+            poly[1]=claim-2*poly[0]-sum(poly[2:],c.ref(0))
+        else:c.equal(poly[0]+sum(poly),claim)
+        for v in poly:c.observe(v,11)
+        x=c.sample();c.equal(x,point[len(point)-1-i]);claim=horner(poly,x)
+    final=p['point_and_eval'][1]
+    if not is_derived(final):c.equal(claim,c.ext(final))
+    return point,claim
+def affine(c,a,main,prep):
+    return sum((c.ref(weight)*(main if kind==0 else prep)[index] for kind,index,weight in a['weights']),c.ref(a['constant']))
+def lookup(c,a,main,prep,alpha,betas):
+    return affine(c,a['multiplicity'],main,prep), alpha+betas[0]*a['kind']+sum((b*affine(c,v,main,prep) for b,v in zip(betas[1:],a['values'])),c.ref(0))
+def observe_openings(c,groups):
+    c.observe(len(groups))
+    for prep,main in groups:
+        for a in [prep,main]:
+            c.observe(len(a))
+            for v in a:c.observe(v,11)
+
+def gkr_and_zero(c,meta,s,pv):
+    c.phase('GKR');p=s['logup_gkr_proof'];desc=meta['chips'];opening=s['opened_values']['chips']
+    names=[d['name'] for d in desc];assert names==sorted(names)
+    gkr=p['logup_evaluations'];gkr_open=gkr['chip_openings']
+    n=c.exts(p['circuit_output']['numerator']);d=c.exts(p['circuit_output']['denominator'])
+    assert len(n)==len(d) and len(n)==1<<logceil(len(n));initial=logceil(len(n))
+    c.grind(meta['gkr_grinding_bits'],c.field(p['witness']));alpha=c.sample()
+    arity=max(len(l['values'])+1 for chip in desc for l in chip['lookups'])
+    betas=table([c.sample() for _ in range(logceil(arity))])
+    # Production recursion AIRs have no State/GlobalAccumulation/control buses.
+    assert not any(l['kind'] in (9,10,11,12) for chip in desc for l in chip['lookups'])
+    # Sum n_i/d_i == 0 as a fraction tree: the combined numerator must vanish
+    # and the combined denominator must be invertible, which, like the native
+    # verifier, rejects any zero denominator. One inversion replaces len(d).
+    fractions=list(zip(n,d))
+    while len(fractions)>1:
+        fractions=[(a*db+b*da,da*db) for (a,da),(b,db) in zip(fractions[0::2],fractions[1::2])]+fractions[len(fractions)//2*2:]
+    total,denominator=fractions[0];c.equal(total,0);c.equal(denominator*c.inverse(denominator),1)
+    for a in n+d:c.observe(a,11)
+    point=[c.sample() for _ in range(initial)];ne=mle(n,point);de=mle(d,point)
+    assert len(p['round_proofs'])==21
+    for i,r in enumerate(p['round_proofs']):
+        lam=c.sample();c.equal(c.ext(r['sumcheck_proof']['claimed_sum']),lam*ne+de)
+        q,val=sumcheck(c,r['sumcheck_proof'],3);assert len(q)==i+initial
+        n0,n1,d0,d1=[c.ext(r[k]) for k in ['numerator_0','numerator_1','denominator_0','denominator_1']]
+        c.equal(val,eq(q,point)*(lam*(n0*d1+n1*d0)+d0*d1))
+        for a in [n0,n1,d0,d1]:c.observe(a,11)
+        line=c.sample();point=q[:initial-1]+[line]+q[initial-1:]
+        ne=n0+(n1-n0)*line;de=d0+(d1-d0)*line
+    interaction=point[:initial-1];trace=point[initial-1:];assert len(trace)==22
+    for a,b in zip(trace,c.exts(gkr['point'])):c.equal(a,b)
+    nums=[];dens=[];groups=[]
+    for chip,o in zip(desc,opening):
+        m=c.exts(gkr_open[chip['name']]['main_trace_evaluations_full'] or [])
+        pp=c.exts(gkr_open[chip['name']]['preprocessed_trace_evaluations_full'] or [])
+        mask=geq(height_bits(s,chip),[0]+list(reversed(trace)))
+        for l in chip['lookups']:
+            rn,rd=lookup(c,l,m,pp,alpha,betas);pn,pd=lookup(c,l,[0]*len(m),[0]*len(pp),alpha,betas)
+            num=rn-pn*mask;nums.append(num if l['send'] else -num);dens.append(rd+(1-pd)*mask)
+        groups.append((pp,m))
+    width=1<<len(interaction);assert len(nums)<=width
+    c.equal(ne,mle(nums+[0]*(width-len(nums)),interaction));c.equal(de,mle(dens+[1]*(width-len(dens)),interaction))
+    observe_openings(c,groups)
+    c.phase('zerocheck');a=c.sample();batch=c.sample();lam=c.sample();zero=s['zerocheck_proof'];z=c.exts(zero['point_and_eval'][0]);assert len(z)==22
+    batch_powers=[];v=1
+    for _ in range(max(chip['main_width']+chip['prep_width'] for chip in desc)):v=v*batch;batch_powers.append(v)
+    expected=0
+    for pp,m in groups:expected=expected*lam+sum((o*b for o,b in zip(m+pp,batch_powers)),c.ref(0))
+    c.equal(c.ext(zero['claimed_sum']),expected)
+    rlc=0;eqval=eq(list(reversed(trace)),z);opened=[]
+    for chip,o in zip(desc,opening):
+        m=c.exts(o['main']['local']);pp=c.exts(o['preprocessed']['local']);assert len(m)==chip['main_width'] and len(pp)==chip['prep_width']
+        ce=c.emit_air(chip,m,pp,pv,a);pra=c.emit_air(chip,[c.ref(0)]*len(m),[c.ref(0)]*len(pp),pv,a)
+        mask=geq(height_bits(s,chip),[0]+z)
+        ob=sum((o*b for o,b in zip(m+pp,batch_powers)),c.ref(0));rlc=rlc*lam+eqval*(ce-pra*mask+ob)
+        opened.append((pp,m))
+    if is_derived(zero['point_and_eval'][1]):
+        # The final evaluation is reconstructed by the sumcheck itself.
+        _,final=sumcheck(c,zero,4);c.equal(rlc,final)
+    else:c.equal(rlc,c.ext(zero['point_and_eval'][1]));sumcheck(c,zero,4)
+    observe_openings(c,opened)
+    return z,opened
+
+def poseidon(c,values,constants):
+    def linear(s):
+        out=[]
+        for i in range(0,16,4):
+            a,b,d,e=s[i:i+4];t=a+b+d+e;out += [t+b+a+b,t+b+2*d,t+e+d+e,t+e+2*a]
+        sums=[sum(out[j::4],c.ref(0)) for j in range(4)];return [x+sums[i%4] for i,x in enumerate(out)]
+    diag=[-2,1,2,pow(2,-1,P),3,4,-pow(2,-1,P),-3,-4,pow(256,-1,P),pow(8,-1,P),pow(1<<24,-1,P),-pow(256,-1,P),-pow(8,-1,P),-pow(16,-1,P),-pow(1<<24,-1,P)]
+    def perm(s):
+        s=linear(s)
+        for r in range(28):
+            if r<4 or r>=24:
+                s=[(x+constants[r][i])*(x+constants[r][i])*(x+constants[r][i]) for i,x in enumerate(s)];s=linear(s)
+            else:
+                x=s[0]+constants[r][0];s[0]=x*x*x;total=sum(s,c.ref(0));s=[total+x*d for x,d in zip(s,diag)]
+        return s
+    s=[c.ref(0)]*16
+    for i in range(0,len(values),8):s[:len(values[i:i+8])]=values[i:i+8];s=perm(s)
+    return s[:8]
+
+def public_bindings(c,meta,pv):
+    c.phase('public bindings');b=meta['public_binding']
+    for key,off in [('application','application_offset'),('recursion_root','root_offset')]:
+        for i,x in enumerate(b[key]):c.equal(pv[b[off]+i],x)
+    c.equal(pv[b['complete_offset']],1);c.equal(pv[b['execution_offset']],1);c.equal(pv[b['exit_offset']],0)
+    for i in range(32):c.emit(17,pv[b['committed_offset']+i].i,i,count=0)
+    # The shrink AIR constrains only the committed digest, so recomputing it is
+    # what binds every public value above. The compact shrink commits the root
+    # digest: Poseidon2 over the application key, committed-value digest, exit
+    # code and recursion root, in the exporter's order.
+    inputs=[pv[i] for i in b['digest_inputs']]
+    assert inputs and all(x.i&0x40000000 for x in inputs)
+    constants=''.join(int(x).to_bytes(4,'big').hex() for row in meta['poseidon_constants'][:28] for x in row)
+    digest=c.emit(18,[x.i&0x0fffffff for x in inputs],constants,count=8)
+    for i in range(8):c.equal(Ref(c,digest.i+i),pv[b['digest_offset']+i])
+
+def height_bits(s,chip):
+    # global_balance asserts the opened degree bits equal these constants.
+    height=s['chip_heights'][chip['name']];return [(height>>(22-i))&1 for i in range(23)]
+
+def global_balance(c,meta,s):
+    # The supported shrink machine has only local lookup buses. Requiring the native
+    # identity digest on every chip is stronger than checking their sum, and
+    # establishes the same final global-balance result without curve arithmetic.
+    identity=[637514027,1595065213,1998064738,72333738,1211544370,822986770,1518535784,
+              1604177449,90440090,259343427,140470264,1162099742,941559812,1064053343]
+    assert meta['vk']['global']==identity
+    for sums in s['chip_cumulative_sums'].values():
+        g=sums['global']
+        for x,v in zip(g['x']+g['y'],identity):c.equal(c.field(x),v)
+    for chip,o in zip(meta['chips'],s['opened_values']['chips']):
+        height=s['chip_heights'][chip['name']];degree=c.exts(o['quotient'][0]);assert len(degree)==23
+        for i,x in enumerate(degree):c.equal(x,(height>>(22-i))&1)
+
+def branching(c,start,end,zrow,zindex):
+    # For an aligned 2^k interval, row+start has no carry in its low k bits.
+    # Its MLE factors into low-bit equality, zero high row bits and fixed high
+    # index bits. Keep the general four-state automaton for all other intervals.
+    height=end-start;k=logceil(height)
+    if height==1<<k and start%height==0 and k<=len(zrow) and k<=len(zindex) and end<=1<<len(zindex):
+        low=eq(zrow[len(zrow)-k:] if k else [],zindex[len(zindex)-k:] if k else [])
+        high=reduce(lambda a,r:a*(1-r),zrow[:len(zrow)-k],c.ref(1))
+        for bit in range(k,len(zindex)):
+            x=zindex[-1-bit];high=high*(x if start>>bit&1 else 1-x)
+        return low*high
+    n=max(len(zrow),len(zindex));v=[c.ref(0),c.ref(0),c.ref(1),c.ref(0)]
+    for layer in range(n,-1,-1):
+        r=zrow[-1-layer] if layer<len(zrow) else 0;x=zindex[-1-layer] if layer<len(zindex) else 0
+        cb=(start>>layer)&1;nb=(end>>layer)&1;out=[]
+        for state in range(4):
+            acc=0
+            for row in range(2):
+                total=row+(state&1)+cb;ix=total&1;cmp=(state>>1) if ix==nb else nb;target=(total>>1)|(cmp<<1)
+                weight=(r if row else 1-r)*(x if ix else 1-x);acc=acc+weight*v[target]
+            out.append(acc)
+        v=out
+    return v[0]
+
+def is_power_interval(start,end):
+    height=end-start;return height>0 and height&(height-1)==0 and start%height==0
+
+def eq_bits(c,value,vars,plan):
+    """EQ(bits_be(value,len(vars)), vars) with 0/1 constants folded. Each segment
+    of the plan is a product chain over its bit positions in order, and the
+    segments are multiplied left to right, so the compiler's operation cache
+    shares every common prefix across the values that use the same plan."""
+    n=len(vars);bits=[(value>>(n-1-j))&1 for j in range(n)]
+    def chain(positions):
+        acc=c.ref(1)
+        for j in positions:acc=acc*(vars[j] if bits[j] else 1-vars[j])
+        return acc
+    parts=[chain(segment) for segment in plan]
+    return reduce(lambda acc,part:acc*part,parts[1:],parts[0])
+
+def eq_bit_plan(values,n):
+    """Bit order and segmentation minimizing the distinct products eq_bits emits
+    for these constant values. Bits are ordered greedily by how few distinct
+    prefixes they create; an exact dynamic program then picks the segments."""
+    values=sorted(set(values))
+    def bit(v,j):return (v>>(n-1-j))&1
+    order=[];keys=[()]*len(values);left=list(range(n))
+    while left:
+        j=min(left,key=lambda j:(len({k+(bit(v,j),) for k,v in zip(keys,values)}),j))
+        keys=[k+(bit(v,j),) for k,v in zip(keys,values)];order.append(j);left.remove(j)
+    # distinct[a][b]: distinct patterns of order[a:b] across the values.
+    distinct=[[0]*(n+1) for _ in range(n+1)]
+    for a in range(n):
+        for b in range(a+1,n+1):distinct[a][b]=len({tuple(bit(v,j) for j in order[a:b]) for v in values})
+    def segment(a,b):return sum(distinct[a][d] for d in range(a+1,b+1))
+    # best[b]: cheapest plan for order[:b] as (cost, cuts); a later segment
+    # adds its own chain plus one combination per distinct prefix at its end.
+    best={0:(0,[0])}
+    for b in range(1,n+1):
+        options=[(segment(0,b),[0,b])]
+        for a in range(1,b):
+            cost,cuts=best[a];options.append((cost+segment(a,b)+distinct[0][b],cuts+[b]))
+        best[b]=min(options)
+    cuts=best[n][1]
+    return [order[a:b] for a,b in zip(cuts,cuts[1:])]
+
+def branching_program(c,zrow,zindex,first,second):
+    """Ziren's BranchingProgram::eval at field points (big-endian inputs)."""
+    layers=max(len(zrow),len(zindex))
+    def lsb(point,i):return point[len(point)-1-i] if i<len(point) else c.ref(0)
+    result=[c.ref(0)]*4;result[2]=c.ref(1)  # success: carry=0, comparison=1
+    for layer in range(layers,-1,-1):
+        point=[lsb(zrow,layer),lsb(zindex,layer),lsb(first,layer),lsb(second,layer)]
+        lagrange=table(point)
+        new=[]
+        for state in range(4):
+            carry,comparison=state&1,state>>1;acc=[c.ref(0)]*4
+            for i,weight in enumerate(lagrange):
+                row,index,curr,nxt=i&1,(i>>1)&1,(i>>2)&1,(i>>3)&1
+                total=row+carry+curr
+                if total&1!=index:continue
+                out=(total>>1)|((comparison if index==nxt else nxt)<<1)
+                acc[out]=acc[out]+weight
+            new.append(sum((a*r for a,r in zip(acc,result)),c.ref(0)))
+        result=new
+    return result[0]
+
+def jagged_eval(c,je,offsets,w,zrow,zindex):
+    """Verify the jagged-eval sumcheck as Ziren's recursion verifier does and
+    return its bound claimed sum: Sum_k w_k BP(t_k, t_{k+1})."""
+    claimed=c.ext(je['claimed_sum']);c.observe(claimed,11)
+    last=offsets[-1];half=(last-1).bit_length()+1 if last>1 else 1
+    point,final=sumcheck(c,je,2);assert len(point)==2*half
+    first,second=point[:half],point[half:]
+    first_plan=eq_bit_plan(offsets[:-1],half);second_plan=eq_bit_plan(offsets[1:],half)
+    total=sum((wc*eq_bits(c,lo,first,first_plan)*eq_bits(c,hi,second,second_plan)
+               for wc,lo,hi in zip(w,offsets,offsets[1:])),c.ref(0))
+    c.equal(final,total*branching_program(c,zrow,zindex,first,second))
+    return claimed
+
+def jagged(c,meta,s,b,z,opened):
+    c.phase('jagged PCS');packing=b['packing'];offsets=packing['offsets'];widths=packing['column_counts'];assert sum(widths)==len(offsets)-1
+    groups=[];names={d['name']:i for i,d in enumerate(meta['chips'])};areas=[]
+    rounds=packing['round_counts'];pads=packing['padding_heights'];assert len(rounds)==2 and len(pads)==2
+    for ri,round in enumerate(rounds):
+        if ri==0:
+            assert len(round)==len(meta['vk']['prep'])
+            for (height,width),(name,vkw,vkh) in zip(round,meta['vk']['prep']):
+                assert (height,width)==(vkh,vkw);groups.append(opened[names[name]][0])
+        else:
+            for (height,width),desc,opening in zip(round,meta['chips'],opened):
+                assert height==s['chip_heights'][desc['name']] and width==desc['main_width'];groups.append(opening[1])
+        groups.extend([[c.ref(0)] for _ in pads[ri]])
+        areas.append(sum(h*w for h,w in round)+sum(pads[ri]))
+    assert len(groups)==len(widths)
+    assert len(b['preceding_commits'])==1;c.equal(c.hash(b['preceding_commits'][0]),c.constant_hash(meta['vk']['root']))
+    for ri,area in enumerate(areas):assert area%(1<<21)==0
+    assert b['commit']['area']==areas[-1] and b['commit']['log_stacking_height']==21
+    zcol=[c.sample() for _ in range(logceil(len(offsets)-1))];w=table(zcol);y=[c.exts(row) for row in b['y_per_chip']]
+    assert [len(g) for g in groups]==widths and [len(g) for g in y]==widths
+    sy=sum((a*t for a,t in zip([v for row in y for v in row],w)),c.ref(0));so=sum((a*t for a,t in zip([v for row in groups for v in row],w)),c.ref(0));c.equal(sy,so)
+    red=b['reduction'];claim=so;zstar=[];half=pow(2,-1,P)
+    assert len(red['rounds'])==logceil(packing['total_values'])
+    for r in red['rounds']:
+        p0,p1,p2=c.exts(r['evals']);c.observe(p0,11);c.observe(-3*half*p0+2*p1-half*p2,11);c.observe(half*p0-p1+half*p2,11)
+        c.equal(p0+p1,claim);x=c.sample();zstar.append(x);claim=p0*(x-1)*(x-2)*half-p1*x*(x-2)+p2*x*(x-1)*half
+    for x,yv in zip(zstar,c.exts(red['eval_point'])):c.equal(x,yv)
+    q=c.ext(red['q_at_z'])
+    je=b['jagged_eval']['partial_sumcheck_proof']
+    if all(is_power_interval(lo,hi) for lo,hi in zip(offsets,offsets[1:])):
+        # Padded, aligned columns: the closed form is cheaper than verifying the
+        # jagged-eval sumcheck, whose transcript is then only replayed.
+        weight=sum((wc*branching(c,lo,hi,z,list(reversed(zstar))) for wc,lo,hi in zip(w,offsets,offsets[1:])),c.ref(0))
+        c.equal(claim,q*weight)
+        c.observe(c.ext(je['claimed_sum']),11)
+        for entry in je['univariate_polys']:
+            for x in c.exts(entry['coefficients']):c.observe(x,11)
+            c.sample()
+    else:
+        c.equal(claim,q*jagged_eval(c,je,offsets,w,z,list(reversed(zstar))))
+    target=21+logceil(sum(area>>21 for area in areas));orig=len(zstar)
+    while len(zstar)<target:zstar.append(c.sample())
+    for x in zstar[orig:min(21,target)]:q=q*(1-x)
+    batch=[x for row in b['whir_proof']['batch_evaluations'] for x in c.exts(row)];batch+= [c.ref(0)]*((1<<len(zstar[21:]))-len(batch));c.equal(mle(batch,zstar[21:]),q)
+    return zstar[:21],[c.hash(b['preceding_commits'][0]),c.hash(b['commit']['commitment'])],[a>>21 for a in areas]
+
+def whir_refs(c,b,point,roots,stripes,config):
+    out=bytearray();references=[]
+    def n(v,k=1):out.extend(integer(v).to_bytes(k,'big'))
+    def arg(v):
+        value=c.ref(v).i;references.append((len(out),value));n(value,4)
+    def vec(v,count=1):
+        n(len(v),count)
+        ids=[c.ref(x).i for x in v]
+        for tag,mask,stride in [(1,0x40000000,1),(2,0x20000000,4)]:
+            if ids and ids[0]&0xf0000000==mask and ids==list(range(ids[0],ids[0]+len(ids)*stride,stride)):
+                n(tag);n(ids[0]&0x0fffffff,4);return
+        n(0)
+        for x in v:arg(x)
+    def polys(v):
+        n(len(v))
+        for poly in v:vec(c.exts(poly))
+    for k in ['n','startingRate','batchPow']:n(config[k])
+    n(config['finalQueries'],2);n(config['finalPow']);n(len(config['rounds']))
+    for r in config['rounds']:
+        n(r['fold']);n(r['rate']);n(r['queries'],2);n(r['ood']);n(r['queryPow']);n(len(r['foldPow']))
+        for bits in r['foldPow']:n(bits)
+    vec(roots);n(len(stripes))
+    for count in stripes:n(count,2)
+    vec(point)
+    p=b['whir_proof'];w=p['whir_proof']
+    n(len(p['batch_evaluations']))
+    for row in p['batch_evaluations']:vec(c.exts(row),2)
+    arg(c.field(p['batch_grinding_witness']));n(len(w['round_sumcheck_polys']))
+    for r in w['round_sumcheck_polys']:polys(r)
+    n(len(w['round_ood_answers']))
+    for r in w['round_ood_answers']:vec(c.exts(r))
+    vec([c.hash(root) for root in w['round_commitments']]);n(len(w['round_query_openings']))
+    for r in w['round_query_openings']:
+        n(len(r['leaves']),2)
+        for leaf in r['leaves']:
+            ids=[v['f'] for row in leaf['values'] for v in row]
+            assert ids and ids==list(range(ids[0],ids[0]+len(ids))), "packed leaf requires contiguous native fields"
+            assert len({len(row) for row in leaf['values']})==1
+            n(len(leaf['values']),2)
+            for row in leaf['values']:vec([c.field(x) for x in row],2)
+            vec([c.hash(x) for x in leaf['proof']])
+    vec(c.exts(w['final_poly']),2);polys(w['final_sumcheck_polys']);vec([c.field(x) for x in w['folding_pow']]);arg(c.field(w['final_pow']))
+    return out,references
+
+def allocate(c,whir,references):
+    def inputs(code,args):
+        if code in (4,5,6,8,20,21,22,23):return [0,1]
+        if code in (7,10,11,12,16,17):return [0]
+        if code==14:return [1]
+        return []
+    last={}
+    for i,(code,dst,*args) in enumerate(c.ops):
+        for j in inputs(code,args):
+            if args[j]<0x10000000:last[args[j]]=i
+    for _,ref in references:
+        if ref<0x10000000:last[ref]=len(c.ops)
+    mapping={};free=[];peak=0;ops=[]
+    def mapped(ref):return mapping[ref] if ref<0x10000000 else ref
+    for i,(code,dst,*args) in enumerate(c.ops):
+        slots=inputs(code,args);converted=list(args)
+        for j in slots:converted[j]=mapped(args[j])
+        for ref in set(args[j] for j in slots):
+            if ref<0x10000000 and last[ref]==i:heapq.heappush(free,mapping[ref])
+        count=8 if code in (16,18) else 1 if code in (4,5,6,7,13,15,20,21,22,23) else 0
+        physical=0
+        if count==8:
+            physical=peak;peak+=8
+        elif count:
+            if free:physical=heapq.heappop(free)
+            else:physical=peak;peak+=1
+        for j in range(count):
+            mapping[dst+j]=physical+j
+            if dst+j not in last:heapq.heappush(free,physical+j)
+        ops.append((code,physical,*converted))
+    whir=bytearray(whir)
+    for at,ref in references:whir[at:at+4]=mapped(ref).to_bytes(4,'big')
+    return ops,peak,whir
+
+def binary_program(ops,registers,meta,whir):
+    out=bytearray(b'KVE2'+bytes.fromhex(meta['profile_id'][2:]))
+    def n(x,k=4):out.extend(x.to_bytes(k,'big'))
+    n(meta['field_count']);n(meta['hash_count']);n(registers)
+    for op in ops:
+        code,dst,*args=op;n(code,1)
+        if code in (4,5,6,7,13,15,16,18,20,21,22,23):n(dst)
+        if code in (4,5,6,8,20,21,22,23):n(args[0]);n(args[1])
+        elif code in (7,10,11,12,16):n(args[0])
+        elif code==13:pass
+        elif code==14:n(args[0],1);n(args[1])
+        elif code==15:n(args[0],32)
+        elif code==17:n(args[0]);n(args[1],1)
+        elif code==18:
+            # Poseidon2 over listed packet fields: BE16 count, BE32 field indices, round constants.
+            n(len(args[0]),2)
+            for index in args[0]:n(index)
+            out.extend(bytes.fromhex(args[1]))
+        else:raise ValueError(op)
+    n(255,1);n(len(whir));out.extend(whir)
+    return out
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('directory',type=Path);p.add_argument('out',type=Path);args=p.parse_args();directory=args.directory
+    meta=json.loads((directory/'machine.json').read_text());a=json.loads((directory/'marker.json').read_text());b=json.loads((directory/'marker_shift.json').read_text());schema=layout(a,b)
+    if meta.get('suite', 'keccak256-v1') != 'keccak256-v1':
+        raise ValueError('Solidity generator supports only the Keccak256 compact suite')
+    c=Compiler();proof=schema['proof'];s=proof['jagged_shard_proof'];bundle=schema['bundle'];pv=[c.field(x) for x in proof['public_values']]
+    public_bindings(c,meta,pv)
+    global_balance(c,meta,s)
+    c.phase('transcript prologue');vk=meta['vk'];c.observe(c.constant_hash(vk['root']),12);c.observe(vk['pc_start'])
+    for x in vk['global']:c.observe(x)
+    c.observe(0)
+    for _ in range(2):
+        for x in pv:c.observe(x)
+    root=c.hash(bundle['commit']['commitment'])
+    for x in c.seed(root):c.observe(x)
+    c.observe(len(meta['chips']))
+    for chip in meta['chips']:
+        name=chip['name'];c.observe(s['chip_heights'][name]);c.observe(len(name))
+        for char in name.encode():c.observe(char)
+    z,opened=gkr_and_zero(c,meta,s,pv);point,roots,stripes=jagged(c,meta,s,bundle,z,opened)
+    args.out.mkdir(parents=True,exist_ok=True)
+    cfg=meta['whir_config'];assert cfg['starting_ood_samples']==0
+    config={'n':21,'startingRate':cfg['starting_log_inv_rate'],'batchPow':cfg['batch_pow_bits'],'finalQueries':cfg['final_queries'],'finalPow':cfg['final_pow_bits'],
+            'rounds':[dict(fold=r['folding_factor'],rate=r['log_inv_rate'],queries=r['num_queries'],ood=r['ood_samples'],queryPow=r['queries_pow_bits'],foldPow=r['pow_bits']) for r in cfg['round_parameters']]}
+    whir,references=whir_refs(c,bundle,point,roots,stripes,config)
+    ops,registers,whir=allocate(c,whir,references)
+    manifest={'metadata':meta,'schema':schema,'original_registers':c.regs,'registers':registers,'ops':ops,'phases':c.phases,'stripes':stripes}
+    (args.out/'program.json').write_text(json.dumps(manifest,separators=(',',':')))
+    (args.out/'program.bin').write_bytes(binary_program(ops,registers,meta,whir))
+    first_leaf=bundle['whir_proof']['whir_proof']['round_query_openings'][0]['leaves'][0]['values'][0][0]['f']
+    first_gkr=s['logup_gkr_proof']['round_proofs'][0]['sumcheck_proof']['univariate_polys'][0]['coefficients'][0]['value'][0]['f']
+    (args.out/'mutations.json').write_text(json.dumps({'merkle_field':first_leaf,'gkr_field':first_gkr}))
+    print(json.dumps({'original_registers':c.regs,'registers':registers,'operations':len(c.ops),'phases':c.phases}))
+
+if __name__=='__main__':main()
