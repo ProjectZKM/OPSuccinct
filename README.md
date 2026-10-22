@@ -8,10 +8,12 @@ Cargo dependency; OPSuccinct supplies the exporter, on-chain verifier and bridge
 | --- | --- |
 | [Bridge protocol](docs/bridge.md) | Metis statement, Ziren integration, SP1 + OP reference and withdrawal gates |
 | [Solidity verifier](contracts/ziren-shrink-verifier/) | Proof verification, encoding and deployment |
+| [Output oracle](contracts/metis-output-oracle/) | Proof-only finality for Metis SCC batches |
 | [Reproduction](docs/development.md) | Generate a Ziren proof, export, build and verify on a local EVM |
 
 The Solidity backend verifies `CompactShrink<Keccak256Suite>` proofs.
-The Metis guest and settlement contracts remain proposals. Cargo defines the
+The output oracle is built against the current Metis contracts; the Metis guest
+and the SCC and messenger upgrades remain proposals. Cargo defines the
 Ziren revision; all generated proofs, verifier builds and measurements stay
 outside the repository.
 

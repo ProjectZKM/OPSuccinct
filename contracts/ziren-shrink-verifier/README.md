@@ -140,7 +140,7 @@ neither the on-chain verifier nor Ziren's native verifier.
 Kernel, WHIR, math and constructor-created helper code is pinned. Calls use
 `STATICCALL`; frame bounds restrict register updates and prevent replacing proof
 bytes or the expected statement. Partial installation does not authorize proof
-acceptance. The bridge adapter computes the expected digest from its authenticated
+acceptance. The bridge's output oracle computes the expected digest from its authenticated
 statement and accepted predecessor before calling the approved entry.
 
 ### Compiler tuning

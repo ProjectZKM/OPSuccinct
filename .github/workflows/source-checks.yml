@@ -52,3 +52,7 @@ jobs:
         run: >-
           forge test --root contracts/ziren-shrink-verifier
           --no-match-contract 'ShrinkReferenceVerifierTest|OptimizedKernelsTest|KeccakWireReaderTest|StackedWhirTest'
+      - name: Output oracle format and Foundry tests
+        run: |
+          forge fmt --check --root contracts/metis-output-oracle
+          forge test --root contracts/metis-output-oracle
