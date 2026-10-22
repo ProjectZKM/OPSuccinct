@@ -9,13 +9,13 @@ The guest and settlement contracts below remain to be implemented.
 flowchart LR
     A[Withdrawal recorded on Metis] --> B[Canonical candidate batch published]
     B --> C[Submit batch statement and Ziren shrink proof]
-    C --> D[Bridge adapter verifies and finalizes batch]
+    C --> D[Output oracle verifies and finalizes batch]
     D --> E[Relay withdrawal with message inclusion proof]
     E --> F[Bridge releases escrow once]
 ```
 
 The prover supplies a Ziren shrink proof for the candidate batch's state
-transition. The bridge adapter checks the canonical batch and accepted
+transition. The output oracle checks the canonical batch and accepted
 predecessor, verifies the proof against the expected statement, then marks the
 batch finalized. Candidate publication alone does not establish finality;
 post-activation batches require a valid proof regardless of elapsed time.
@@ -75,7 +75,7 @@ source discrepancy is not evidence of production behavior or a deployed exploit.
 ## Ziren integration
 
 Ziren produces the shrink proof establishing the authenticated Metis state
-transition and public statement. The bridge adapter selects independently
+transition and public statement. The output oracle selects independently
 approved guest/verifier configurations and recursion keys, derives the expected
 output digest from the statement, and requires proof verification before
 finalizing the candidate batch.
@@ -90,7 +90,26 @@ The shrink AIR constrains only the Poseidon2 digest of its public values. The
 compact shrink is terminal and commits the root digest, as Ziren's Groth16/PLONK
 wrap does: it covers the application key, the committed-value digest, the exit
 code and the recursion root. The on-chain verifier recomputes it, so the expected
-output digest the adapter supplies is bound through it.
+output digest the output oracle supplies is bound through it.
+
+The output oracle calls the generated verifier entry, a subclass of
+[`NativeTerminalVerifier`](../contracts/ziren-shrink-verifier/src/NativeTerminalVerifier.sol),
+through `verify(bytes proofPacket, bytes32 expectedOutputDigest)`. Measured
+[verifier costs](../contracts/ziren-shrink-verifier/README.md) on 2026-10-21 for
+Ethereum block 26240087, on a local Osaka Anvil node that enforces the
+16,777,216-gas transaction cap:
+
+| Cost | Gas |
+| --- | --- |
+| Verification transaction | 13,668,039 |
+| of which calldata (182 KB packet) | 2,834,640 |
+| Deployment, all modules (one-time, across transactions) | 141,599,268 |
+
+The proof geometry does not depend on the Metis batch, so verification cost is
+per proof, not per block. The output oracle's statement checks and proven-batch
+write must fit in the remaining 3,109,177 gas under the cap, because the proof
+is verified in the same transaction that records the batch as proven. Rerun the
+measurement for every approved build.
 
 ## Ethereum finalization and bridge changes
 
@@ -100,8 +119,10 @@ currently combines SCC membership, fraud-window/dispute gates and a separate
 message-passer account/storage proof. The proposal changes state finality while
 preserving message proofs, sender authentication, escrow and replay protection.
 
-1. `MetisValidityAdapter` checks the statement's domain, approved L1 anchor,
-   canonical candidate, exact range/configuration and accepted predecessor.
+1. `MetisOPSuccinctL2OutputOracle` (proposed; not yet implemented), named
+   after OP Succinct's `OPSuccinctL2OutputOracle`, checks the statement's
+   domain, approved L1 anchor, canonical candidate, exact range/configuration
+   and accepted predecessor.
    The anchor must be an ancestor of the verifying block: `blockhash` within
    the 256-block window, or a hash checkpointed earlier on L1 as OP Succinct's
    `checkpointBlockHash` does. A proof against any other anchor is rejected.
