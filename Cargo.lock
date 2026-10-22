@@ -1525,29 +1525,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "opsuccinct-shrink-export"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bincode",
- "hex",
- "p3-air",
- "p3-field",
- "p3-keccak",
- "p3-koala-bear",
- "p3-symmetric",
- "p3-uni-stark",
- "serde",
- "serde_json",
- "zkm-core-executor",
- "zkm-core-machine",
- "zkm-pcs",
- "zkm-primitives",
- "zkm-prover",
- "zkm-recursion-core",
-]
-
-[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3076,6 +3053,29 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "ziren-shrink-export"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "hex",
+ "p3-air",
+ "p3-field",
+ "p3-keccak",
+ "p3-koala-bear",
+ "p3-symmetric",
+ "p3-uni-stark",
+ "serde",
+ "serde_json",
+ "zkm-core-executor",
+ "zkm-core-machine",
+ "zkm-pcs",
+ "zkm-primitives",
+ "zkm-prover",
+ "zkm-recursion-core",
 ]
 
 [[package]]

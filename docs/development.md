@@ -13,8 +13,8 @@ python3 -m pip install -r contracts/ziren-shrink-verifier/native/requirements.in
 export PYTHONDONTWRITEBYTECODE=1
 export CARGO_TARGET_DIR=/outside/repos/opsuccinct-target
 python3 scripts/check-dependencies.py
-cargo test --locked -p opsuccinct-shrink-export --lib
-cargo check --locked -p opsuccinct-shrink-export --features machine --tests
+cargo test --locked -p ziren-shrink-export --lib
+cargo check --locked -p ziren-shrink-export --features machine --tests
 ```
 
 Cargo supplies Ziren directly. The guest/bridge integration is described in
@@ -23,11 +23,11 @@ Cargo supplies Ziren directly. The guest/bridge integration is described in
 ## Prove and export
 
 Execute your guest and compress its proof with Ziren. In the guest host, enable
-`opsuccinct-shrink-export`'s `machine` feature and export the shrink proof:
+`ziren-shrink-export`'s `machine` feature and export the shrink proof:
 
 ```rust,ignore
 use zkm_prover::{CompactShrink, Keccak256Suite};
-use opsuccinct_shrink_export::{machine, wire::{Mode, Profile}};
+use ziren_shrink_export::{machine, wire::{Mode, Profile}};
 
 let shrink = prover.shrink_with::<CompactShrink<Keccak256Suite>>(compressed, opts)?;
 let work = std::path::Path::new("/outside/repos/shrink-proof");
@@ -50,12 +50,12 @@ With `derived = true` the wire omits every sumcheck polynomial's linear
 coefficient and final evaluation, and the jagged PCS claims that repeat the
 zerocheck openings. The verifier reconstructs them, which is the cheaper encoding.
 
-The `export_fixture` example in `crates/shrink-export` runs this sequence. It
+The `export_fixture` example in `crates/ziren-shrink-export` runs this sequence. It
 derives the verifier data from the proof's own key, which suits local
 reproduction only.
 
 ```sh
-cargo run --release -p opsuccinct-shrink-export --features machine --example export_fixture -- \
+cargo run --release -p ziren-shrink-export --features machine --example export_fixture -- \
   prove /path/to/guest.elf /outside/repos/shrink-proof 10 --derived
 ```
 
@@ -65,7 +65,7 @@ EthProofs worker output: its `proof.bin`, its `public_values.bin` and the guest
 shrink, and `replay` re-exports a saved `shrink.bin` without proving again.
 
 ```sh
-cargo run --release -p opsuccinct-shrink-export --features machine --example export_fixture -- \
+cargo run --release -p ziren-shrink-export --features machine --example export_fixture -- \
   shrink /path/to/proof.bin /path/to/program.elf /path/to/public_values.bin \
   /outside/repos/shrink-proof --derived
 ```

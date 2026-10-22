@@ -13,11 +13,11 @@
 //!
 //! `shrink` accepts a saved SDK `ZKMProofWithPublicValues` holding a compressed
 //! proof (such as an EthProofs block proof) and runs only the compact shrink.
-use opsuccinct_shrink_export::{
+use std::path::{Path, PathBuf};
+use ziren_shrink_export::{
     machine,
     wire::{Mode, Profile},
 };
-use std::path::{Path, PathBuf};
 use zkm_core_executor::ZKMContext;
 use zkm_core_machine::io::ZKMStdin;
 use zkm_core_machine::reduce::ZKMReduceProof;

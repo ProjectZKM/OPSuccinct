@@ -82,7 +82,7 @@ finalizing the candidate batch.
 
 Ziren is pinned directly in [Cargo.toml](../Cargo.toml) and [Cargo.lock](../Cargo.lock).
 [Ziren #568](https://github.com/ProjectZKM/Ziren/pull/568) supplies the shrinker;
-OPSuccinct owns the [exporter](../crates/shrink-export/) and
+OPSuccinct owns the [exporter](../crates/ziren-shrink-export/) and
 [Solidity verifier](../contracts/ziren-shrink-verifier/). Proof encoding,
 hash-suite and deployment details are documented with the verifier.
 

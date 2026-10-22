@@ -1,9 +1,9 @@
 //! Explicit full proving gate using the normal current-version admitted keys.
 #![cfg(feature = "machine")]
 
-use opsuccinct_shrink_export::wire::{Mode, Profile};
 use p3_field::PrimeCharacteristicRing;
 use p3_koala_bear::KoalaBear;
+use ziren_shrink_export::wire::{Mode, Profile};
 use zkm_core_executor::ZKMContext;
 use zkm_core_machine::io::ZKMStdin;
 use zkm_pcs::{
