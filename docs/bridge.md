@@ -56,7 +56,7 @@ requiring retention of the DA inputs and state witnesses needed later. Choose
 these independently. The [cost model](costs.md#demand-driven-verification)
 accounts for idle periods and catch-up submissions separately.
 
-The [optimization research](optimizations.md) examines removing the 64-batch
+The [optimization research](costs.md#optimization-research) examines removing the 64-batch
 catch-up bottleneck and repeated proving work. Its alternative finality formats
 are proposals; they do not change the current oracle's limits or statement.
 
