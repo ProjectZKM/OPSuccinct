@@ -221,6 +221,54 @@ by the oracle. Measure actual withdrawal demand to choose between demand-driven,
 periodic and combined scheduling; SCC batch frequency alone does not determine
 the required number of L1 verifications.
 
+## Proving compute budget
+
+**The Metis proving cost per day is not yet measured.** The publication sample
+and L1 verification scenarios above do not include proof generation. Neither
+9,052 explorer-counted transactions nor 38 SCC batches determines the zkVM
+workload: execution, authenticated derivation, witness handling, recursion and
+the terminal proof all contribute. A real Metis range/aggregation benchmark
+and either a suitable machine price or a prover-service quote are still needed.
+
+For rented infrastructure, budget using allocated, billable time:
+
+```text
+proving_compute_USD_per_day = sum(instance_billable_hours * instance_USD_per_hour)
+                          + additional_host_storage_and_network_charges
+```
+
+Include range proving, aggregation, shrink/wrapping, retries, startup and billed
+idle time. Do not charge a separate terminal stage again if it is already
+included in the measured instance time. Owned hardware instead requires an
+explicit depreciation, electricity and operations allocation.
+
+As a pricing reference checked on **2026-10-23**, the
+[Runpod Pods price list](https://www.runpod.io/pricing) advertises an RTX 5090
+instance with 32 GB VRAM, 35 GB host RAM and 9 vCPUs at **$1.19/hour**. The
+[GPU product page](https://www.runpod.io/gpu-models/rtx-5090) also lists that
+starting rate. Availability and the actual required machine configuration must
+be checked before purchasing capacity.
+
+| Assumed total billable RTX 5090 instance-hours per day | Rental component at $1.19/hour |
+| --- | --- |
+| 1 | $1.19/day |
+| 4 | $4.76/day |
+| 24, such as one instance continuously allocated | $28.56/day |
+
+These are **capacity-budget examples, not a Metis proving-cost range**. We have
+not established that any row provides enough capacity for the daily workload
+or the withdrawal-latency target. A running but idle rented instance still costs
+money; delaying L1 verification does not automatically reduce its rental bill.
+
+Ziren's [published performance measurements](https://docs.zkm.io/introduction/performance.html)
+use Ethereum guests and a different host configuration, and distinguish the
+revisions used for throughput and proof-size measurements. Their compressed
+proof timing does not measure our complete Metis aggregation/shrink pipeline.
+Do not combine those timings with this smaller rental instance's price as if
+they were a matched benchmark. Measure the intended guest, pinned prover build,
+machine and full proof stages together before adding a proving figure to the
+daily operating budget.
+
 ## Design implications and missing measurements
 
 The current [oracle](../contracts/metis-output-oracle/README.md) permits up to 64
