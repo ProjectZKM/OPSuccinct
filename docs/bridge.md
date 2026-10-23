@@ -108,12 +108,20 @@ Ethereum block 26240087, on a local Osaka Anvil node that enforces the
 | of which calldata (182 KB packet) | 2,834,640 |
 | Deployment, all modules (one-time, across transactions) | 141,599,268 |
 
-The proof geometry does not depend on the Metis batch, so verification cost is
-per proof, not per block. The output oracle's statement checks and proven-batch
+For a fixed approved shrink profile, proof geometry does not grow with the
+number of Metis blocks covered. Exact gas still depends on the build and packet;
+this Ethereum fixture is not an end-to-end Metis measurement.
+The output oracle's statement checks and proven-batch
 writes must fit in the remaining 3,109,177 gas under the cap, because the proof
 is verified in the same transaction that records the batches as proven. Proving
 the maximum 64 batches costs the oracle about 1.6M gas in its tests. Rerun the
 measurement for every approved build.
+
+The [cost model](costs.md) records a dated Metis publication-cost sample and
+compares proof-submission intervals. Existing DA and SCC publication remain
+costs of this design; proving and proof verification add to them. Select an
+interval only after measuring real Metis proving cost, the complete oracle
+transaction and withdrawal latency.
 
 ## Ethereum finalization and bridge changes
 
