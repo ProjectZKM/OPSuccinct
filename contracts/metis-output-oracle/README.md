@@ -75,9 +75,12 @@ final: canonical, outside the fraud window, not disputed and ending before
 ## Gas and tests
 
 Proving 64 batches costs the oracle 1,575,532 gas beyond verification in the
-tests (warm SCC storage; cold mainnet reads add about 2,100 per batch). That
-fits in the 3,109,177 gas left under the 16,777,216 transaction cap after the
-13,668,039-gas verification.
+tests (warm SCC storage; cold mainnet reads add about 2,100 per batch). Comparing
+this with the 3,109,177 gas left after the recorded 13,668,039-gas standalone
+verification suggests sufficient room under the 16,777,216 transaction cap.
+It is a component estimate, not a complete Metis transaction measurement; verify
+the real guest, verifier and oracle together. The [cost model](../../docs/costs.md)
+states the assumptions used for submission-frequency budgets.
 
 ```sh
 forge test --root contracts/metis-output-oracle

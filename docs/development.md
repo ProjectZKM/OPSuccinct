@@ -76,9 +76,10 @@ python3 contracts/ziren-shrink-verifier/native/measure.py \
 
 This deploys every module and submits the complete proof in one transaction.
 Success means `complete_verification_succeeded: true` in the printed report,
-with `transaction_gas_used` and `total_deployment_gas`. Because the proof
-geometry does not depend on the guest, every guest costs the same; compare with
-the [measured costs](../contracts/ziren-shrink-verifier/README.md).
+with `transaction_gas_used` and `total_deployment_gas`. Compare the approved
+profile, build and encoding with the
+[measured costs](../contracts/ziren-shrink-verifier/README.md); fixed proof
+geometry does not guarantee identical gas for every packet or guest build.
 `--skip-checkpoints` only skips optional intermediate-vector comparisons.
 
 ## Notes

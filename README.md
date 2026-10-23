@@ -7,6 +7,7 @@ Cargo dependency; OPSuccinct supplies the exporter, on-chain verifier and bridge
 | Read | Purpose |
 | --- | --- |
 | [Bridge protocol](docs/bridge.md) | Metis statement, Ziren integration, SP1 + OP reference and withdrawal gates |
+| [Costs and optimizations](docs/costs.md) | Historical Metis costs, proof budgets, optimization research and validation requirements |
 | [Solidity verifier](contracts/ziren-shrink-verifier/) | Proof verification, encoding and deployment |
 | [Output oracle](contracts/metis-output-oracle/) | Proof-only finality for Metis SCC batches |
 | [Reproduction](docs/development.md) | Generate a Ziren proof, export, build and verify on a local EVM |
