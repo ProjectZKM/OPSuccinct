@@ -7,6 +7,10 @@ or per-batch submission is required by the oracle. A production configuration
 needs both a cost budget and a measured withdrawal-latency target; fitting a
 proof under the transaction gas cap does not establish either.
 
+See [optimization research](optimizations.md) for ranked proposals, including
+proof reuse, authenticated-prefix finality, terminal comparisons and publication
+tuning. Their potential savings are separate from the measured baseline here.
+
 ## Observed L1 publication costs
 
 This is a historical, one-day sample for Andromeda, chain ID 1088:
