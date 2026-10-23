@@ -2,9 +2,10 @@
 
 The proposed bridge retains Metis's existing data publication and SCC candidate
 submission. Validity proving and L1 proof verification therefore add costs to
-those paths. A production configuration needs both a cost budget and a measured
-withdrawal-latency target; fitting a proof under the transaction gas cap does not
-establish either.
+those paths when performed. Verification can be demand-driven: no fixed timer
+or per-batch submission is required by the oracle. A production configuration
+needs both a cost budget and a measured withdrawal-latency target; fitting a
+proof under the transaction gas cap does not establish either.
 
 ## Observed L1 publication costs
 
@@ -131,7 +132,10 @@ incremental_L1_ETH_per_day = n * 15,400,000 * p * 10^-9
 incremental_L1_USD_per_day = incremental_L1_ETH_per_day * 2,385.65
 ```
 
-| Submission scenario | Proofs/day | Mean batches/proof at 38 batches/day | Added USD/day at 0.25 gwei | At 1 gwei |
+The following periodic policies are comparison scenarios, not protocol
+requirements. A demand-driven policy is described next.
+
+| Periodic submission scenario | Proofs/day | Mean batches/proof at 38 batches/day | Added USD/day at 0.25 gwei | At 1 gwei |
 | --- | --- | --- | --- | --- |
 | Every SCC batch | 38 | 1 | $349.02 | $1,396.08 |
 | Every 2 hours | 12 | 3.17 | $110.22 | $440.87 |
@@ -150,6 +154,68 @@ The recorded verifier deployment would cost approximately $84.45 at 0.25 gwei
 or $337.81 at 1 gwei under the same USD conversion. This excludes other bridge
 contracts and development costs. Account for replacement deployments when
 approving new verifier builds; do not charge this entire amount to every proof.
+
+## Demand-driven verification
+
+The operator can wait to submit proofs until a pending L2-to-L1 withdrawal or
+another consumer needs a newer proven prefix. With no such demand, no proof
+verification transaction is required and the operator's scheduled verification
+expense can be zero. Existing publication, infrastructure and any background
+proving costs continue. The oracle still accepts submissions from callers with
+permission, including permission opened by `fallbackTimeout`; demand-driven
+scheduling is an operator policy, not a new on-chain restriction.
+
+Let `P` be the last proven batch and `K` the batch needed for the selected
+withdrawals. The current oracle requires:
+
+```text
+D = max(0, K - P)
+minimum_catch_up_submissions = ceil(D / 64)
+catch_up_L1_USD_estimate = submissions * 15,400,000 * p_gwei * 10^-9 * 2,385.65
+```
+
+If `D = 0`, use the existing finalization; only the message proof and relay are
+needed. Otherwise every intervening batch must be covered, even those without
+withdrawals. A single range finalization can serve many withdrawal messages.
+The proof need not extend past the chosen target to the latest published batch.
+The submission count is a lower bound assuming the full 64-batch capacity can
+be used, all predecessor batches are canonical and provable, and no retry is
+needed. It counts validity-proof submissions, not withdrawal transactions.
+
+Using the sample's rate of 38 batches/day solely as a scenario assumption:
+
+| Demand scenario | Backlog to requested target | Minimum submissions | Added verification budget at 0.25 gwei | At 1 gwei |
+| --- | --- | --- | --- | --- |
+| No demand for newer finality | Any | 0 required while idle | $0 | $0 |
+| Request after one day, target at end of that day's batches | 38 | 1 | $9.18 | $36.74 |
+| Request after seven days, target at end of that period | 266 | 5 | $45.92 | $183.70 |
+
+The last two rows are catch-up costs **when the request is serviced**, not daily
+charges. The seven-day case would cost about $6.56/day at 0.25 gwei if amortized
+over that illustrative cycle, before proving and other expenses. A long idle
+period defers expenditure and can reduce the number of small submissions, but
+does not remove the eventual cost of covering its backlog. The 64-batch cap
+means one aggregate proof cannot finalize an arbitrarily long idle period under
+the current contract. Supporting that would require a different finality
+representation and/or revised limits with a measured gas budget.
+
+Separate generation from verification policy:
+
+| Policy | Idle-period expense | Effect when demand arrives |
+| --- | --- | --- |
+| Background range proving; demand-driven aggregation/submission | Witness collection and range proving continue; L1 proof submissions can wait | Reuse compatible proofs of canonical ranges, then aggregate and finalize the needed prefix |
+| Demand-driven generation and submission | Publication, required infrastructure and input retention continue; proving can wait | Generate the missing proofs before finalizing, increasing catch-up latency |
+
+Both policies must preserve the DA data, state witnesses or compatible proofs
+needed to establish the requested prefix later. Do not assume historical inputs
+will remain retrievable from a live endpoint indefinitely. Configuration changes
+and candidate resets must also be handled before reusing earlier work.
+
+The proposer/relayer needs demand detection, coalescing of requests, a withdrawal
+latency target and a funding policy for catch-up work. These are not implemented
+by the oracle. Measure actual withdrawal demand to choose between demand-driven,
+periodic and combined scheduling; SCC batch frequency alone does not determine
+the required number of L1 verifications.
 
 ## Design implications and missing measurements
 
@@ -193,9 +259,11 @@ Before selecting the production interval and proof terminal:
 3. Compare direct shrink verification and a supported SNARK-wrapped terminal on
    the same workload and latency target, including extra wrapping compute and
    L1 verification. No end-to-end cost winner has been established here.
-4. Evaluate 6-hour and 24-hour budget scenarios, and price any faster withdrawal
-   target explicitly. Extend publication sampling across normal and congested
-   periods before setting an operating budget.
+4. Measure withdrawal demand and compare demand-driven catch-up with the 6-hour
+   and 24-hour periodic scenarios. State whether proving runs in the background,
+   how requests are coalesced and funded, and the resulting withdrawal latency.
+   Extend sampling across idle, active and congested periods before setting an
+   operating budget.
 
 The Metis guest and complete withdrawal integration remain unimplemented, so
 this document cannot yet quote a total production proving cost or withdrawal SLA.

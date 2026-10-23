@@ -9,7 +9,7 @@ guest and the SCC and messenger upgrades below remain to be implemented.
 ```mermaid
 flowchart LR
     A[Withdrawal recorded on Metis] --> B[Canonical candidate batch published]
-    B --> C[Submit batch statement and Ziren shrink proof]
+    B --> C[On demand: submit proofs through withdrawal batch]
     C --> D[Output oracle verifies and finalizes batch]
     D --> E[Relay withdrawal with message inclusion proof]
     E --> F[Bridge releases escrow once]
@@ -25,6 +25,36 @@ A relayer then proves the withdrawal message under the finalized state root.
 The messenger checks inclusion, sender authentication and replay protection
 before the existing bridge releases escrow. The batch validity proof and the
 withdrawal message proof serve separate checks.
+
+### Demand-driven finalization
+
+Proof verification need not run for every SCC batch or on a fixed timer. If no
+pending L2-to-L1 withdrawal or other consumer needs newer L1-finalized state,
+the operator may defer proof submission. Candidate batches continue to be
+published but remain unproven; waiting never makes them valid for withdrawal.
+An L1-to-L2 deposit alone does not require advancing this output oracle.
+
+When a withdrawal needs batch `K` and the last proven batch is `P`, prove the
+contiguous prefix `P + 1 .. K`, including batches without withdrawals. Several
+withdrawals can share the same finalization, and a withdrawal under an already
+proven batch needs no new validity proof. Each withdrawal still needs its
+message inclusion proof and relay checks. There is no need to prove newer
+batches beyond the selected target merely because they have been published.
+
+The current oracle accepts at most 64 batches per submission. A backlog of `D`
+unproven batches therefore requires at least `ceil(D / 64)` successful
+submissions to finalize the target; aggregation alone cannot bypass that limit.
+This assumes a canonical, provable prefix and the SCC protections described
+below. The oracle already permits waiting, but demand detection, request
+coalescing and the proposer/relayer scheduler remain to be implemented.
+`fallbackTimeout` only opens submission permission; it does not require a
+submission or finalize a batch without proof.
+
+Proof generation can continue in the background while L1 verification waits.
+Alternatively, generation can also wait, increasing catch-up latency and
+requiring retention of the DA inputs and state witnesses needed later. Choose
+these independently. The [cost model](costs.md#demand-driven-verification)
+accounts for idle periods and catch-up submissions separately.
 
 ## Statement and guest
 
