@@ -34,8 +34,11 @@ on a local Osaka Anvil node that enforces the 16,777,216-gas transaction cap:
 | of which calldata (182 KB packet) | 2,834,640 |
 | Deployment, all modules | 141,599,268 |
 
-The proof geometry does not depend on the guest workload, so these costs apply
-to any guest under the same profile. Rerun the measurement for every new build.
+For a fixed approved profile, proof geometry does not grow with the guest
+workload. Exact gas still depends on the build and encoded packet; the Ethereum
+fixture above is not a complete Metis oracle measurement. Rerun for each approved
+build and representative proof. See the [cost model](../../docs/bridge.md#cost-model) for
+publication costs and explicitly estimated proof-submission budgets.
 
 Follow [reproduction](../../docs/development.md) to produce a shrink proof with
 Ziren, export it with OPSuccinct, compile the Solidity verifier and run verification
