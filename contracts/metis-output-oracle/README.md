@@ -79,7 +79,7 @@ tests (warm SCC storage; cold mainnet reads add about 2,100 per batch). Comparin
 this with the 3,109,177 gas left after the recorded 13,668,039-gas standalone
 verification suggests sufficient room under the 16,777,216 transaction cap.
 It is a component estimate, not a complete Metis transaction measurement; verify
-the real guest, verifier and oracle together. The [cost model](../../docs/costs.md)
+the real guest, verifier and oracle together. The [cost model](../../docs/bridge.md#cost-model)
 states the assumptions used for submission-frequency budgets.
 
 ```sh
