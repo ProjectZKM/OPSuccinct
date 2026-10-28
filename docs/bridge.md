@@ -5,15 +5,15 @@ transactions are published in Ethereum blobs. L1 records each batch's blob
 versioned hash at commit and, once a Ziren proof is verified, the latest L2
 state root and the L2 withdrawal tree root. Deposits enter an L1 deposit tree
 that L2 syncs and verifies before minting. The [cost model](#cost-model)
-compares this design with Metis's measured publication costs, and
+compares this design with an assumed current publication cost, and
 [optimizations](#optimizations) ranks further savings.
 
 The [output oracle](../contracts/metis-output-oracle/) in this repository
 implements the earlier design, which proves batches already appended to Metis's
 state commitment chain (SCC). This document supersedes that design. The rollup
 contract, bridges, guest and messenger changes below are not yet implemented;
-prototype contracts were measured outside the repository on
-[real Metis batches](#measurements-on-real-metis-batches).
+prototype contracts and the guest's blob checks were
+[measured](#measurements) outside the repository.
 
 ## Overview
 
@@ -66,8 +66,8 @@ the derivation format changes. Unfinalized batches may be reverted by an
 authorized party; finalized batches may not.
 
 Metis blobs already use the OP Stack blob encoding (version 0, 127 bytes per 4
-field elements), OP channel frames and brotli compression. Each blob in the
-sample holds one Metis span batch, whose prefix is the first L2 block number
+field elements), OP channel frames and brotli compression. Each blob holds one
+Metis span batch, whose prefix is the first L2 block number
 followed by parent and L1-origin checks
 ([`span_batch.go`](https://github.com/MetisProtocol/mvm/blob/61ef7e9a9a1f404505279e1d86f2c26a885bcc86/go/op-program/client/derive/span_batch.go)).
 
@@ -208,14 +208,10 @@ commitment, for any range it may prove later. The
 [catch-up costs](#demand-driven-catch-up) cover idle periods. The current SCC
 oracle in this repository still accepts at most 64 batches per proof.
 
-## Measurements on real Metis batches
+## Measurements
 
-Sample: 40 consecutive Andromeda blobs in Ethereum blocks 26,282,691 to
-26,289,347, covering L2 blocks 23,328,412 to 23,332,790 (4,379 blocks, 7,267
-transactions, about 23.2 hours) on October 28. Every blob held one span batch,
-one blob per transaction; 38 matched SCC batches block for block, and the last
-two had not yet been appended. Blobs were on average 32% full, 57% at most, with
-109.5 blocks and 182 transactions per batch.
+Inputs were Metis span-batch blobs in the format above, one span batch per
+blob.
 
 **In-guest blob authentication and decoding.** The guest checked each blob's
 versioned hash and KZG proof with the patched crates, then decoded it through
@@ -228,21 +224,19 @@ brotli to the span-batch header. Executed on Ziren `82ceeae`:
 | 8, batched | 116.9M | 42.0M | 159.0M |
 | 40, batched | 534.5M | 257.1M | 791.7M |
 
-Batched verification costs about 13.4M instructions per blob, and the whole
-check about 181,000 instructions per L2 block. These are executor instruction
-counts: precompile work adds rows to its own chips, so proving time and trace
-area remain to be measured. The guest was built with the `zkm` toolchain dated
-2026-01-08 because the 2026-09-17 toolchain was unavailable on this machine.
+Batched verification costs about 13.4M instructions per blob. These are
+executor instruction counts: precompile work adds rows to its own chips, so
+proving time and trace area remain to be measured. The guest was built with the
+`zkm` toolchain dated 2026-01-08 because the 2026-09-17 toolchain was
+unavailable on this machine.
 
-**L1 and L2 gas.** Prototype contracts on a local Osaka node, committing the
-exact mainnet blobs and finalizing with the real Metis state roots and a no-op
-verifier:
+**L1 and L2 gas.** Prototype contracts on a local Osaka node, committing
+Metis-format blobs and finalizing with a no-op verifier:
 
 | Path | Gas |
 | --- | --- |
 | Commit, one blob per transaction | 54,332 (first commit 71,432) |
 | Commit, six blobs per transaction | 65,765, about 11,000 per batch |
-| Current Metis publication per batch | About 342,300 over three transactions |
 | Finalize, excluding the verifier | 74,046 to 117,702, independent of batch count |
 | L1 deposit with tree append (mock token) | 104,306 to 153,522 |
 | L1 withdrawal relay, 32-node path | 95,804 |
@@ -251,12 +245,7 @@ verifier:
 | L2 withdrawal append | 122,240 |
 
 The L2 figures use Ethereum's gas schedule; Metis's own schedule must be checked.
-At the sample's 38 batches/day, single-blob commits save about 288,000 gas per
-batch, about **$6.5/day at 0.25 gwei**. The blob fee is unchanged. Real Metis
-deposits currently use 209,784 to 218,602 gas through a different token and
-path, so they are not a like-for-like comparison. The sample contained only
-four L1-to-L2 messages and one withdrawal, so per-message costs matter less
-than commit and verification costs. The [cost model](#cost-model) prices these.
+The [cost model](#cost-model) prices these.
 
 ## Cost model
 
@@ -274,62 +263,20 @@ accounting from ETH expenditure and compute. Faster withdrawals can reduce
 capital tied up or third-party fast-bridge charges, but those benefits require
 actual withdrawal demand and pricing.
 
-Dollar amounts use a fixed **$2,385.65/ETH**, observed from
-[Blockscout's ETH statistics endpoint](https://eth.blockscout.com/api/v2/stats)
-on October 23. This is neither a historical execution-time rate nor a forecast.
-At 0.25 gwei, one million gas costs about **$0.60**.
+Dollar amounts use illustrative assumptions, not observations: **$2,400/ETH**,
+an effective L1 gas price of **0.25 gwei** (one million gas costs about
+**$0.60**), **40 batches/day** with one blob each, and 30-day months. Replace
+them with current values before relying on a figure.
 
-### Observed L1 publication costs
+### Current publication cost
 
-This is a historical, one-day sample for Andromeda, chain ID 1088:
-**2026-10-22 00:00:00 UTC inclusive to 2026-10-23 00:00:00 UTC exclusive**
-(October 22 08:00 to October 23 08:00 in Asia/Ulaanbaatar), Ethereum blocks
-**26,244,425 through 26,251,600 inclusive**. The independently checked boundary
-block hashes are:
+Assume Metis's current L1 publication (state-root appends, inbox references and
+blob transactions) averages **$10/day**, or $300/month. This is an assumed
+average, not a measurement. It excludes deposits and relays, node and MPC
+infrastructure, RPC and archive services, staffing and incentives.
 
-- [26,244,425](https://eth.blockscout.com/block/26244425):
-  `0x552fecbcf2a2473c1eff4c2e3909cf8b69c8c590054cebc4c62c23152bf63774`.
-- [26,251,600](https://eth.blockscout.com/block/26251600):
-  `0x931a7582b743fd6b599f6999210ac488d4c03d24fae67492c36a22e5f31da0ab`.
-
-| Path | Destination | Sender |
-| --- | --- | --- |
-| SCC state batches | `0xA2FaAAC9120c1Ff75814F0c6DdB119496a12eEA6` | `0xf3CEB4C2ef996CdBc95C4E18c6D0CA988CC09040` |
-| Inbox references | `0xFf00000000000000000000000000000000001088` | `0x1A9da0aedA630dDf2748a453BF6d92560762D914` |
-| Blob publication | Same inbox | `0xaE4d46bD9117Cb017C5185844699c51107cB28a9` |
-
-| Component | Count | Paid ETH | USD |
-| --- | --- | --- | --- |
-| SCC execution | 38 transactions | 0.003087289887304141 | $7.37 |
-| Inbox-reference execution | 38 transactions | 0.000242373287438100 | $0.58 |
-| Blob-transaction execution | 38 transactions | 0.001093722012117000 | $2.61 |
-| Blob data | 38 blobs in those same blob transactions | 0.000096186904215552 | $0.23 |
-| **Total** | **114 distinct transactions** | **0.004519572091074793** | **$10.78** |
-
-Rounded dollar amounts need not sum to the rounded total. The SCC calldata
-contains 4,795 state roots covering L2 blocks 23,303,500 through 23,308,294. The
-[L2 explorer's daily chart](https://andromeda-explorer.metis.io/api/v2/stats/charts/transactions)
-reported 9,052 transactions for October 22; dividing gives about $0.00119 as a
-calendar-day normalization, not a measured per-transaction cost or user fee.
-
-This sample is **not Metis's total operating expense**. It excludes other L1
-activity, deposits and relays, node and MPC infrastructure, RPC and archive
-services, staffing, incentives and off-chain publication charges. Receipts
-establish sender expenditure, not who funds it. One day does not establish a
-long-term average.
-
-All 38 blob transactions paid an effective priority fee of 1 gwei, about
-**$1.90** of their execution fees; their effective price was 1.37 gwei against
-0.254 gwei for the SCC appends.
-
-#### Accounting and reproduction
-
-Discover transactions from the paginated Blockscout lists for the
-[SCC](https://eth.blockscout.com/api/v2/addresses/0xA2FaAAC9120c1Ff75814F0c6DdB119496a12eEA6/transactions?filter=to)
-and [inbox](https://eth.blockscout.com/api/v2/addresses/0xFf00000000000000000000000000000000001088/transactions?filter=to).
-These are live endpoints: start at the latest page and follow
-`next_page_params` past the start of the sample. Filter by the half-open UTC
-interval, destination and sender, and deduplicate hashes. Use integer wei:
+To compute an actual figure, sum the receipts of those transactions over a
+half-open UTC interval in integer wei:
 
 ```text
 execution_fee_wei = gasUsed * effectiveGasPrice
@@ -337,43 +284,23 @@ blob_fee_wei      = blobGasUsed * blobGasPrice     # zero for non-blob transacti
 total_ETH         = sum(execution_fee_wei + blob_fee_wei) / 10^18
 ```
 
-The explorer's `fee.value` contains execution fees only; add blob fees
+Explorer fee fields often contain execution fees only; add blob fees
 separately. Do not use `maxFeePerGas` or `maxFeePerBlobGas`, which are caps, and
-do not add the priority fee again. All 114 receipts were checked through
-`https://ethereum-rpc.publicnode.com` for status, block range, sender,
-destination and both fees. For each sender, the transactions immediately before
-and after the window differ in nonce by 39, so all 38 are present. Decode SCC
-transactions with
-`appendStateBatchByChainId(uint256,bytes32[],uint256,string,bytes32,uint256)`
-and require chain ID 1088, contiguous start elements and
-`lastBatchBlockNumber = shouldStartAtElement + batch.length`. Raw responses and
-ledgers stay outside Git.
+do not add the priority fee again. Check sender nonces at both ends of the
+interval so that no transaction is missing.
 
 ### Publication under this design
 
-The 60 most recent SCC appends on October 28, ending at block 26,289,198,
-averaged **298,068 gas**: 57,435 of calldata (about 530 per root) and execution
-of about 143,908 + 697 per root by least squares, with 108.6 roots on average.
-Together with the 23,250-gas inbox reference and the 21,000-gas blob
-transaction, Metis spends about **342,300 gas per batch**. A
-[measured](#measurements-on-real-metis-batches) single-blob commit uses
-**54,332 gas** and replaces all three. The blob fee is unchanged: a sampled
-blob paid 294.9 gwei at block 26,289,187, about 6,650 gas at that block's base
-fee ([EIP-7918](https://eips.ethereum.org/EIPS/eip-7918) ties the blob price
-to the execution base fee).
+A [measured](#measurements) single-blob commit uses **54,332 gas** and replaces
+the state-root append, the inbox reference and the separate blob transaction.
+When blob demand is low, [EIP-7918](https://eips.ethereum.org/EIPS/eip-7918)
+prices a blob at about 8,192 gas at the execution base fee. A batch therefore
+costs about 62,500 gas-equivalent: about **$1.50/day** or $45/month at the
+assumptions above. Packing six batches per commit lowers this to about 19,000
+gas-equivalent per batch, about $14/month.
 
-The saving depends on what the commit transaction pays per gas, because it
-moves the SCC's execution into the blob uploader's transaction. At a uniform
-0.25 gwei, the 288,000 gas saved per batch is about **$6.5/day** at 38
-batches/day. Applied to the October 22 sample's actual prices, with 38 commits
-and the same blob fees:
-
-| Commit pricing | New publication per day | Against $10.78 |
-| --- | --- | --- |
-| SCC's 0.254 gwei effective price | $1.48 | Saves $9.30 |
-| Uploader's 1.37 gwei effective price (1 gwei tip) | $6.98 | Saves $3.80 |
-
-At the uploader's current 1-gwei tip, about $4.93/day of the new cost is tip.
+The effective gas price includes the priority fee. A 1-gwei tip on every commit
+would add about $5.20/day at 40 batches/day, more than the rest of publication.
 An adaptive priority-fee policy is worth a controlled inclusion-latency test;
 bidding less must not silently stop publication.
 
@@ -393,18 +320,18 @@ Use **13.8M gas per finalization** as a scenario input. Finalize overhead does
 not grow with the number of batches. For `n` finalizations per day at price `p`:
 
 ```text
-L1_verification_USD_per_day = n * 13,800,000 * p_gwei * 10^-9 * 2,385.65
+L1_verification_USD_per_day = n * 13,800,000 * p_gwei * 10^-9 * ETH_USD
 ```
 
 | Periodic scenario | Finalizations/day | At 0.25 gwei | At 1 gwei |
 | --- | --- | --- | --- |
-| Every batch | 38 | $312.44 | $1,249.74 |
-| Every 2 hours | 12 | $98.66 | $394.66 |
-| Every 6 hours | 4 | $32.89 | $131.55 |
-| Every 24 hours | 1 | $8.22 | $32.89 |
+| Every batch | 40 | $331.20 | $1,324.80 |
+| Every 2 hours | 12 | $99.36 | $397.44 |
+| Every 6 hours | 4 | $33.12 | $132.48 |
+| Every 24 hours | 1 | $8.28 | $33.12 |
 
 These exclude proving, relays and deployment. The verifier deployment costs
-about $84.45 at 0.25 gwei or $337.81 at 1 gwei; the prototype rollup and L1
+about $84.96 at 0.25 gwei or $339.84 at 1 gwei; the prototype rollup and L1
 bridge deployed for about 1.5M gas more. Charge replacement deployments when
 approving new builds, not to every proof.
 
@@ -417,8 +344,8 @@ one finalization covers every committed batch since the last one:
 | Demand scenario | Backlog | Finalizations | At 0.25 gwei | At 1 gwei |
 | --- | --- | --- | --- | --- |
 | No demand | Any | 0 | $0 | $0 |
-| Request after one day | 38 batches | 1 | $8.22 | $32.89 |
-| Request after seven days | 266 batches | 1 | $8.22 | $32.89 |
+| Request after one day | 40 batches | 1 | $8.28 | $33.12 |
+| Request after seven days | 280 batches | 1 | $8.28 | $33.12 |
 
 Under the current SCC oracle the seven-day case needed at least five
 submissions. Proving all intervening batches remains: catch-up shifts cost to
@@ -444,37 +371,36 @@ the median, $400/month is about 483 GPU-hours, about 16 hours a day.
 
 The measured part of the guest so far is DA authentication and decoding: about
 13.4M executor instructions per blob for batched KZG verification and 6.4M for
-decoding, or about 181,000 per L2 block. Precompile work adds rows to its own
+decoding. Precompile work adds rows to its own
 chips, so these counts are not proving time.
 
 ### Monthly scenarios
 
-At October 27 conditions (0.149 gwei effective, $2,354.27/ETH, 42 batches/day,
-30 days), with proving at $400/month:
+At the assumptions above, with proving at $400/month:
 
 | Scenario | Commits and blobs | Verification | Proving | Total/month |
 | --- | --- | --- | --- | --- |
-| Metis today: publication only, no validity proofs | $210 | — | — | **$210** |
-| One blob per commit, 1-gwei tip kept, native proof finalized daily | $188 | $145 | $400 | **$733** |
-| Same with an adaptive low tip | $27 | $145 | $400 | **$572** |
-| Low tip, blobs about 90% full, native proof finalized weekly | $10 | $21 | $400 | **$431** |
-| Low tip, blobs about 90% full, SNARK proof finalized daily | $10 | $5 to $7 | $400 | **$416** |
+| Current, assumed: publication only, no validity proofs | $300 | — | — | **$300** |
+| One blob per commit, native proof finalized daily | $45 | $248 | $400 | **$693** |
+| One blob per commit, native proof finalized weekly | $45 | $35 | $400 | **$480** |
+| Six batches per commit, native proof finalized weekly | $14 | $35 | $400 | **$449** |
+| Six batches per commit, SNARK proof finalized daily | $14 | $8 to $11 | $400 | **$422 to $425** |
 
-The SNARK row assumes 300,000 to 500,000 verification gas and that wrapping
-fits in the proving budget; both need measurement. Proving is about 93% of the
-optimized total, and the optimized L1 spend (about $15 to $31 a month) is lower
-than today's $210. Finalization gas scales with the L1 price: at 1 gwei a daily native
-finalization costs about $975/month, the SNARK terminal tens of dollars.
+The SNARK row assumes 300,000 to 500,000 verification gas plus the finalize
+overhead, and that wrapping fits in the proving budget; both need measurement.
+Six batches per commit delays commitment by up to about 3.6 hours. Proving is
+about 95% of the optimized total, and the optimized L1 spend (about $22 to $49 a
+month) is well below the assumed current $300. Finalization gas scales with the
+L1 price: at 1 gwei a daily native finalization costs about $994/month, the
+SNARK terminal tens of dollars.
 
 ### Deposits and relays
 
 Measured on the prototypes: an L1 deposit with tree append used 104,306 to
 153,522 gas with a mock token, an L1 relay 95,804 and an L2 claim 81,422 to
-98,518 (L2 figures use Ethereum's schedule). Metis deposits currently use
-209,784 to 218,602 gas through a different path. The October 28 sample had
-four L1-to-L2 messages and one withdrawal in 23.2 hours, so these costs are
-small beside commits and verification at current demand. Who pays them, users
-or the operator, is a policy choice.
+98,518 (L2 figures use Ethereum's schedule). Their total scales with deposit
+and withdrawal volume. Who pays them, users or the operator, is a policy
+choice.
 
 ## Optimizations
 
@@ -523,7 +449,7 @@ net_saving_USD_per_finalization =
     - incremental_deployment_and_operations_per_finalization
 ```
 
-The entire 13,668,039-gas verifier transaction costs about $8.15 at 0.25 gwei,
+The entire 13,668,039-gas verifier transaction costs about $8.20 at 0.25 gwei,
 which bounds the saving. At low gas prices and infrequent finalization,
 wrapping compute can outweigh it.
 
@@ -559,9 +485,9 @@ recursion, which is the terminal comparison above.
 
 ### Publication
 
-Commits carry one blob each at about 32% average fill. Packing up to six
+Commits carry one blob each, which may be partly filled. Packing up to six
 batches per commit costs about 11,000 gas per batch instead of 54,332, but at
-38 batches/day it delays commitment by up to about 3.8 hours. Larger batches
+an assumed 40 batches/day it delays commitment by up to about 3.6 hours. Larger batches
 would fill blobs further at a similar latency cost. Both need the
 withdrawal-latency target first.
 
@@ -695,19 +621,3 @@ Lessons for this design:
    and a metadata hash so that one bridge can map many tokens. Extend this
    design's deposit and withdrawal leaves the same way if the bridge carries
    more than METIS.
-
-### Pinned Metis observations
-
-Read-only Ethereum snapshot at block **26,238,563**, hash
-`0xf824bfc54c98f3492bbdf42cd6503fe6522faa00f72710b9404289a9bb0f0d56`:
-
-| Component | Proxy |
-| --- | --- |
-| SCC | `0xA2FaAAC9120c1Ff75814F0c6DdB119496a12eEA6`; fraud window 604800 seconds |
-| Messenger | `0x081D1101855bD523bA69A9794e0217F0DB6323ff` |
-| Standard bridge | `0x3980c9ed79d2c191A89E02Fa3529C60eD6e9c04b` |
-
-Inspected implementations: [SCC](https://eth.blockscout.com/address/0xa738573ec0fd7959bfa60aaa8a23fe7bec6c4bd7?tab=contract),
-[messenger](https://eth.blockscout.com/address/0xc1ce5240b42ab158027095f658d530f9989b414f?tab=contract)
-and [bridge](https://eth.blockscout.com/address/0xa0cfe8af2ab5c9232714647702dbacf862ea4798?tab=contract).
-These are snapshot resolutions, not assertions about future proxy targets.
