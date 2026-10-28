@@ -18,17 +18,47 @@ prototype contracts and the guest's blob checks were
 ## Overview
 
 ```mermaid
-flowchart LR
-    D[User deposits on L1] --> DT[L1 deposit tree]
-    DT --> S[Sequencer syncs root to L2]
-    S --> M[L2 verifies Merkle path and mints]
-    T[L2 transactions] --> B[Blob transaction commits batch hash]
-    B --> P[On demand: Ziren proof of the range]
-    P --> F[L1 stores state root and withdrawal root]
-    W[L2 withdrawal appended to withdrawal tree] --> F
-    F --> R[Relay withdrawal with Merkle path]
-    R --> E[L1 bridge releases escrow once]
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant B1 as L1 bridge
+    participant R as L1 rollup contract
+    participant P as Prover (anyone)
+    participant S as Metis sequencer
+    participant B2 as L2 bridge
+
+    rect rgba(127, 127, 127, 0.1)
+    Note over U,B2: Deposit
+    U->>B1: deposit METIS
+    Note over B1: escrow, append leaf to deposit tree
+    B1-->>B2: deposit root and count, synced by L2 consensus
+    U->>B2: claim with Merkle path
+    B2-->>U: mint METIS on L2
+    end
+
+    rect rgba(127, 127, 127, 0.1)
+    Note over U,B2: Withdrawal on L2, then commit and prove
+    U->>B2: withdraw METIS
+    Note over B2: append leaf to withdrawal tree
+    S->>R: commitBatches, raw L2 transactions in blobs
+    Note over R: chain BLOBHASH into the batch hash
+    P->>P: read blobs, re-execute the range, prove
+    P->>R: finalize(proof, state root, withdrawal root)
+    R->>B1: read depositRootAt for every synced root
+    Note over R: verify proof, store both roots
+    end
+
+    rect rgba(127, 127, 127, 0.1)
+    Note over U,R: Release on L1
+    U->>B1: relay with Merkle path
+    B1->>R: read withdrawRoots
+    B1-->>U: release METIS from escrow
+    end
 ```
+
+The state root and withdrawal root reach L1 only through a verified proof.
+Deposit roots reach L2 through the L2 consensus layer, and finalization checks
+every synced root against L1.
 
 | Location | State |
 | --- | --- |
@@ -52,8 +82,11 @@ that transaction the contract computes
 batchHash = keccak256(0x01 || uint64(batchIndex) || parentBatchHash || BLOBHASH(i))
 ```
 
-and stores only the last hash. The commit is accepted only if the parent equals
-the stored hash and the computed chain equals `lastBatchHash`. Reading
+where `0x01` is the batch-format version byte, so a later format cannot produce
+the same hash as this one. The contract stores the last hash of each commit,
+keyed by its batch index; finalization therefore targets a commit boundary. The
+commit is accepted only if the parent equals the latest stored hash and the
+computed chain equals `lastBatchHash`. Reading
 `BLOBHASH` in the transaction that carries the blob shows that Ethereum
 published that data; a hash supplied in calldata would not. One Osaka
 transaction can carry at most 6 blobs
@@ -62,8 +95,13 @@ transaction can carry at most 6 blobs
 This replaces three transactions per batch today: the SCC state-root append,
 the inbox reference and the separate blob upload. Metis nodes must derive
 batches from the commit transaction's blobs instead of the inbox reference, so
-the derivation format changes. Unfinalized batches may be reverted by an
-authorized party; finalized batches may not.
+the derivation format changes.
+
+The contract accepts commits only from the sequencer addresses that the L2
+consensus layer designates; how they are chosen is out of scope here.
+Unfinalized commits may be reverted only by a governance role behind a
+timelock, and finalized batches never. Reverting a commit invalidates every
+later commit and any proof that covers it.
 
 Metis blobs already use the OP Stack blob encoding (version 0, 127 bytes per 4
 field elements), OP channel frames and brotli compression. Each blob holds one
@@ -74,11 +112,11 @@ followed by parent and L1-origin checks
 ## Deposits
 
 1. A user deposits on the L1 bridge. The bridge escrows the asset, appends
-   `keccak256(abi.encode(l1ChainId, l1Bridge, index, from, l2Recipient, token,
+   `keccak256(abi.encode(l1ChainId, l1Bridge, index, from, l2Recipient,
    amount))` to a depth-32 append-only Merkle tree, and stores the root after
    that deposit as `depositRootAt[index + 1]`.
-2. The sequencer syncs a root and its deposit count to the L2 bridge, in
-   increasing count order. The L2 bridge extends
+2. The L2 consensus layer syncs a root and its deposit count to the L2 bridge,
+   in increasing count order. The L2 bridge extends
    `depositSyncChain = keccak256(abi.encode(depositSyncChain, count, root))`.
 3. Anyone claims a deposit on L2 with its index and Merkle path against a
    synced root. The L2 bridge checks the path, marks the index claimed and
@@ -92,27 +130,33 @@ followed by parent and L1-origin checks
 Because the tree is append-only, a root at count `n` commits to every earlier
 deposit, and the claimed bitmap prevents a second mint across roots. This
 replaces the canonical transaction chain's enqueue path for deposits. Metis
-span batches carry queue-origin (L1) transactions, so after activation the
-guest must reject them or bind them in the same way. The rollup
-must also bound censorship: require that finalization syncs deposits older than
-a published deadline, or provide a forced-inclusion path like
-[Polygon zkEVM's forced batches](#polygon-zkevm). This rule is not yet
-specified.
+span batches carry queue-origin (L1) transactions from that path; it will be
+redesigned, and the guest's treatment of them is not yet specified. Whatever
+replaces it must let the proof authenticate every L1-to-L2 input against L1,
+as the sync chain does for deposit roots.
+
+How and when roots are synced, including any deadline or forced-inclusion
+rule, belongs to the L2 consensus layer and is out of scope here. This design
+only requires that every root L2 accepts is checked against L1 at
+finalization.
 
 ## Withdrawals
 
 Every L2-to-L1 withdrawal appends
-`keccak256(abi.encode(index, l2Sender, l1Recipient, token, amount))` to a
-depth-32 append-only tree in the L2 bridge, whose root is kept in L2 state. The
-guest exports that root at the end of the proven range, and finalization stores
-it as `withdrawRoots[batchIndex]`. The leaf should additionally bind the L2
-chain ID and bridge address before deployment.
+`keccak256(abi.encode(l2ChainId, l2Bridge, index, l2Sender, l1Recipient,
+amount))` to a depth-32 append-only tree in the L2 bridge, whose root is kept in
+L2 state. The guest exports that root at the end of the proven range, and
+finalization stores it as `withdrawRoots[batchIndex]`.
+
+The bridge carries only METIS, so neither leaf has a token field. Each leaf
+binds its source chain ID and bridge address, so a leaf cannot be replayed
+against another deployment.
 
 To relay, anyone supplies the batch index, the withdrawal fields and its
 32-node path. The L1 bridge checks the path at the leaf's own index, which
 prevents proving an interior node, marks the index relayed and releases escrow.
-Because the tree is cumulative, a withdrawal can be relayed against any finalized
-batch at or after the one that includes it.
+Because the tree is cumulative, a withdrawal can be relayed against any stored
+withdrawal root at or after the batch that includes it.
 
 ## Proof statement and guest
 
@@ -141,6 +185,18 @@ must, in order:
    The derived ending block must equal the committed range.
 4. Execute deposit syncs and claims as ordinary L2 transactions, and export the
    final `depositSyncChain` and withdrawal root read from L2 state.
+
+Steps 2 and 3 derive the blob hash and the state root from the same bytes. The
+sequencer encodes a batch's raw transactions into blobs and executes the same
+transactions in the EVM to produce the state root; the guest repeats both from
+one input inside one proof, so neither result can change without the other.
+Every executed transaction and its block structure (boundaries, timestamps and
+L1 origins) must come from the blob, and every decoded transaction must be
+executed. The guest decodes the published bytes rather than re-encoding the
+transactions: brotli output is not unique, so a re-encoded blob would match
+the committed hash only with the sequencer's exact compressor version and
+settings, and decompression is the cheaper direction. Re-encoding is sound
+only with a pinned, deterministic encoder.
 
 Pin the deployed Andromeda node release, fork rules and decoding first. The
 repository's [Go fault-proof program](https://github.com/MetisProtocol/mvm/blob/61ef7e9a9a1f404505279e1d86f2c26a885bcc86/go/op-program/client/program.go)
@@ -195,16 +251,26 @@ build and the real Metis guest.
 ## Demand-driven finalization
 
 Commits continue with every batch; finalization need not. If no withdrawal or
-other consumer needs newer finalized state, the operator may defer proving and
-verification. Waiting never finalizes a batch. When a withdrawal needs batch
-`K`, one proof can finalize every committed batch from the last finalized batch
-through `K`, because the contract checks only the two chained hashes at the
-range ends. There is no per-proof batch limit on L1; proving capacity and guest
-memory bound the range instead.
+other consumer needs newer finalized state, proving and verification may wait.
+Waiting never finalizes a batch. When a withdrawal needs batch `K`, one proof
+can finalize every committed batch from the last finalized batch through `K`,
+where `K` is a commit boundary, because the contract checks only the two
+chained hashes at the range ends. There is no per-proof batch limit on L1;
+proving capacity and guest memory bound the range instead.
 
-Proof generation can run in the background or on demand. Ethereum keeps blobs
-for about 18 days, so the operator must archive blob data, with each blob's
-commitment, for any range it may prove later. The
+Finalization is permissionless: anyone may submit a valid proof, generated by
+their own prover or by a delegated proving service. A withdrawing user, the
+operator or a relayer can therefore finalize the batch they need without
+waiting for anyone else. The public values do not name the submitter, so a
+delegated prover's proof can be submitted from any address. Concurrent
+submissions race: the first valid one wins, and a later proof that starts from
+the replaced finalized batch reverts, wasting its gas. If finalization is ever
+rewarded, bind the submitter in the public values so that a pending proof
+cannot be copied.
+
+Anyone proving must be able to obtain the inputs. Publish the guest, its program
+key and the prover tooling, and keep blob data with each blob's commitment
+available beyond Ethereum's retention of about 18 days. The
 [catch-up costs](#demand-driven-catch-up) cover idle periods. The current SCC
 oracle in this repository still accepts at most 64 batches per proof.
 
@@ -228,7 +294,7 @@ Batched verification costs about 13.4M instructions per blob. These are
 executor instruction counts: precompile work adds rows to its own chips, so
 proving time and trace area remain to be measured. The guest was built with the
 `zkm` toolchain dated 2026-01-08 because the 2026-09-17 toolchain was
-unavailable on this machine.
+unavailable in the build environment.
 
 **L1 and L2 gas.** Prototype contracts on a local Osaka node, committing
 Metis-format blobs and finalizing with a no-op verifier:
@@ -245,6 +311,8 @@ Metis-format blobs and finalizing with a no-op verifier:
 | L2 withdrawal append | 122,240 |
 
 The L2 figures use Ethereum's gas schedule; Metis's own schedule must be checked.
+The prototype leaves still have a token field and no withdrawal domain fields;
+rerun these after adopting the leaf format above.
 The [cost model](#cost-model) prices these.
 
 ## Cost model
@@ -347,8 +415,8 @@ one finalization covers every committed batch since the last one:
 | Request after one day | 40 batches | 1 | $8.28 | $33.12 |
 | Request after seven days | 280 batches | 1 | $8.28 | $33.12 |
 
-Under the current SCC oracle the seven-day case needed at least five
-submissions. Proving all intervening batches remains: catch-up shifts cost to
+Under the current SCC oracle, with at most 64 batches per proof, the seven-day
+case would need at least five submissions. Proving all intervening batches remains: catch-up shifts cost to
 proving capacity and latency, not away from it. The proof must still be
 generated within blob retention or from archived blobs, and a very large range
 may need several range proofs aggregated before one L1 verification.
@@ -371,8 +439,8 @@ the median, $400/month is about 483 GPU-hours, about 16 hours a day.
 
 The measured part of the guest so far is DA authentication and decoding: about
 13.4M executor instructions per blob for batched KZG verification and 6.4M for
-decoding. Precompile work adds rows to its own
-chips, so these counts are not proving time.
+decoding. Precompile work adds rows to its own chips, so these counts are not
+proving time.
 
 ### Monthly scenarios
 
@@ -388,8 +456,8 @@ At the assumptions above, with proving at $400/month:
 
 The SNARK row assumes 300,000 to 500,000 verification gas plus the finalize
 overhead, and that wrapping fits in the proving budget; both need measurement.
-Six batches per commit delays commitment by up to about 3.6 hours. Proving is
-about 95% of the optimized total, and the optimized L1 spend (about $22 to $49 a
+Six batches per commit delays commitment by up to about 3 hours. Proving is
+about 90% to 95% of the optimized totals, and the optimized L1 spend (about $22 to $49 a
 month) is well below the assumed current $300. Finalization gas scales with the
 L1 price: at 1 gwei a daily native finalization costs about $994/month, the
 SNARK terminal tens of dollars.
@@ -487,8 +555,8 @@ recursion, which is the terminal comparison above.
 
 Commits carry one blob each, which may be partly filled. Packing up to six
 batches per commit costs about 11,000 gas per batch instead of 54,332, but at
-an assumed 40 batches/day it delays commitment by up to about 3.6 hours. Larger batches
-would fill blobs further at a similar latency cost. Both need the
+an assumed 40 batches/day it delays commitment by up to about 3 hours. Larger
+batches would fill blobs further at a similar latency cost. Both need the
 withdrawal-latency target first.
 
 ### Withdrawal paths and anchors
@@ -564,7 +632,7 @@ withdraw root of a bundle's last batch. Its
 [`L1ScrollMessenger`](https://github.com/scroll-tech/scroll-contracts/blob/dfbd661520ac30505a773881728cc5cfb005978b/src/L1/L1ScrollMessenger.sol)
 relays withdrawals with a fixed-length Merkle path. Scroll binds L1-to-L2
 messages with a rolling queue hash rather than a deposit tree. On mainnet on
-October 28 its commits used 65,931 to 67,927 gas with one blob.
+2026-10-28 its commits used 65,931 to 67,927 gas with one blob.
 
 ### Polygon zkEVM
 
@@ -585,9 +653,9 @@ its data availability and commitment differ.
 | Deposits | L1 bridge's depth-32 exit tree; each new global exit root becomes a leaf of the L1 info tree with `l1InfoRootMap[count]` | Depth-32 L1 tree with `depositRootAt[count]` |
 | Binding synced roots | `sequenceBatches` binds an existing L1 info root into the batch; each L2 block names a leaf index and the ROM verifies its Merkle path before writing the global exit root to L2 storage ([`process-change-l2-block.zkasm`](https://github.com/0xPolygonHermez/zkevm-rom/blob/d17ccaf9c920697571fad8224e3922571fbb3d59/main/process-change-l2-block.zkasm)) | Sync chain rebuilt from `depositRootAt` at finalization |
 | L2 claim | Proves the deposit leaf under the mainnet exit root of a known global exit root, then mints | Proves the leaf under a synced root, then mints |
-| Censorship resistance | Forced batches: data posted to L1 with a fee, sequenceable by others after a 5-day timeout | Not yet specified |
-| Revert | Unverified sequences only, by an admin role | Unfinalized commits only |
-| Who verifies | Trusted aggregator role only | Not yet specified |
+| Censorship resistance | Forced batches: data posted to L1 with a fee, sequenceable by others after a 5-day timeout | L2 consensus layer; out of scope |
+| Revert | Unverified sequences only, by an admin role | Unfinalized commits only, by timelocked governance |
+| Who verifies | Trusted aggregator role only | Anyone with a valid proof, from their own or a delegated prover |
 | Per-call limit | 1,000 batches | None |
 
 Both deposit bindings ensure every root L2 accepts existed on L1, and both are
@@ -607,17 +675,17 @@ now receives only pessimistic-proof verifications for other Agglayer chains.
 
 Lessons for this design:
 
-1. **Censorship resistance.** Adopt a forced-inclusion path: a user posts a
-   transaction or deposit claim on L1, and after a timeout anyone may commit a
-   batch containing it. Leave it permissionless, unlike Polygon's mainnet
+1. **Censorship resistance.** If the L2 consensus layer adopts a
+   forced-inclusion path, keep it permissionless, unlike Polygon's mainnet
    setting.
-2. **Who may finalize.** Polygon permits only a trusted aggregator. Allow an
-   approved prover, and anyone after a timeout as OP Succinct's
-   `fallbackTimeout` does, so that a missing prover cannot stall withdrawals.
+2. **Who may finalize.** Polygon permits only a trusted aggregator. This design
+   lets anyone finalize with their own or a delegated prover, so no single
+   prover can stall withdrawals.
 3. **Prover binding.** Polygon and OP Succinct bind the submitter's address in
    the proof input, which prevents copying a pending proof to claim a reward.
-   Add it if finalization is rewarded.
+   This design leaves it out so that delegated proofs can be submitted by
+   anyone; add it if finalization is rewarded.
 4. **Leaf contents.** Polygon's leaves carry the origin network, origin token
-   and a metadata hash so that one bridge can map many tokens. Extend this
-   design's deposit and withdrawal leaves the same way if the bridge carries
-   more than METIS.
+   and a metadata hash so that one bridge can map many tokens. This bridge
+   carries only METIS, so its leaves bind the source chain and bridge but no
+   token.
