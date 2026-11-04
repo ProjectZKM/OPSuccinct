@@ -325,7 +325,7 @@ fn split(proof: &ShardProof<SC>) -> Result<(ShardProof<SC>, Bundle)> {
     let bundle = Bundle::from_bytes_for_verification(bytes)
         .ok_or(WireError("invalid native WHIR encoding"))?;
     ensure(
-        bundle.whir_proof.is_some() && bundle.commit.original_commitment.roots().len() == 1,
+        bundle.commit.original_commitment.roots().len() == 1,
         "compact shrink WHIR/root shape",
     )?;
     ensure(
@@ -581,26 +581,17 @@ structure!(zkm_pcs::jagged_pcs::jagged::PackingMeta {
     padding_heights
 });
 structure!(zkm_pcs::jagged_pcs::JaggedCommitGeneric<M> { original_commitment, chip_dims, area, log_stacking_height });
-structure!(zkm_pcs::basefold::proof::MerkleOpening < F, M > { leaves });
-structure!(zkm_pcs::basefold::proof::BasefoldProof<F, E, M> { univariate_messages, fri_commitments, component_polynomials_query_openings_and_proofs, query_phase_openings_and_proofs, final_poly, pow_witness, batch_grinding_witness });
-structure!(zkm_pcs::basefold::stacked::StackedBasefoldProof<F, E, M> { basefold_proof, batch_evaluations });
+structure!(zkm_pcs::whir::merkle::MerkleOpening < F, M > { leaves });
 structure!(zkm_pcs::whir::proof::WhirProof<F, E, M> { round_sumcheck_polys, round_ood_answers, round_commitments, round_query_openings, final_poly, final_sumcheck_polys, folding_pow, final_pow });
 structure!(zkm_pcs::whir::stacked::StackedWhirProof<F, E, M> { whir_proof, batch_evaluations, batch_grinding_witness });
 structure!(Bundle {
     reduction,
-    basefold_proof,
     whir_proof,
     y_per_chip,
     commit,
     packing,
     jagged_eval,
-    preceding_commits,
-    extra_reduction,
-    extra_basefold_proof,
-    extra_commit,
-    extra_packing,
-    extra_jagged_eval,
-    groups
+    preceding_commits
 });
 impl Visit for zkm_pcs::whir::proof::SumcheckPoly<E> {
     fn visit(&mut self, t: &mut Tape) -> Result<()> {
@@ -613,7 +604,7 @@ impl Visit for zkm_pcs::whir::proof::ProofOfWork<F> {
     }
 }
 
-impl Visit for zkm_pcs::basefold::proof::LeafOpening<F, M> {
+impl Visit for zkm_pcs::whir::merkle::LeafOpening<F, M> {
     fn visit(&mut self, t: &mut Tape) -> Result<()> {
         t.label("Leaf");
         let start = t.field_position();

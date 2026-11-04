@@ -119,17 +119,25 @@ pub fn export(
     let parent = directory
         .parent()
         .ok_or_else(|| anyhow::anyhow!("export needs an external parent directory"))?;
-    let repository = repository.canonicalize()?;
+    // Inside a batch container the source tree may not be mounted; then it
+    // cannot contain `directory`, so the guard has nothing to protect against.
+    let repository = match repository.canonicalize() {
+        Ok(path) => Some(path),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err.into()),
+    };
     let mut existing = directory;
     while !existing.exists() {
         existing = existing
             .parent()
             .ok_or_else(|| anyhow::anyhow!("export path has no existing ancestor"))?;
     }
-    anyhow::ensure!(
-        !existing.canonicalize()?.starts_with(&repository),
-        "keep generated verifier data outside the repository"
-    );
+    if let Some(repository) = &repository {
+        anyhow::ensure!(
+            !existing.canonicalize()?.starts_with(repository),
+            "keep generated verifier data outside the repository"
+        );
+    }
     prover.verify_shrink_with::<ShrinkSC>(shrink, app, trusted, public_values)?;
     std::fs::create_dir_all(parent)?;
     std::fs::create_dir_all(directory)?;
@@ -174,7 +182,7 @@ pub fn export(
         .enumerate()
     {
         let main = chip.air.width();
-        let prep = MachineAir::preprocessed_width(&chip.air);
+        let prep = <_ as p3_air::BaseAir<F>>::preprocessed_width(&chip.air);
         // Exported lookups carry no scope and the native folder evaluates every
         // bus locally, so a chip with any global-scope lookup must not export.
         assert!(
@@ -206,7 +214,7 @@ pub fn export(
         inputs.extend(&opening.preprocessed.local);
         inputs.extend(shrink.proof.public_values.iter().copied().map(E::from));
         let expected =
-            zkm_pcs::shard_level::basefold_constraint_folder::eval_constraints_shard_host(
+            zkm_pcs::shard_level::constraint_folder::eval_constraints_shard_host(
                 chip,
                 opening,
                 alpha,
@@ -240,7 +248,7 @@ pub fn export(
             inputs.extend(&changed.preprocessed.local);
             inputs.extend(pv.iter().copied().map(E::from));
             let expected =
-                zkm_pcs::shard_level::basefold_constraint_folder::eval_constraints_shard_host(
+                zkm_pcs::shard_level::constraint_folder::eval_constraints_shard_host(
                     chip, &changed, alpha, &pv,
                 );
             assert_eq!(
