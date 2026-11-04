@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check that all Ziren dependencies share one repository and one rev or branch, and that Cargo.lock resolves them to one commit."""
+"""Check the Ziren dependency pin.
+
+All shared Ziren dependencies must use one repository and one rev, branch, or
+tag, and Cargo.lock must resolve them to a single commit.
+"""
 from pathlib import Path
 import tomllib
 from urllib.parse import urlsplit

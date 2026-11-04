@@ -119,8 +119,7 @@ pub fn export(
     let parent = directory
         .parent()
         .ok_or_else(|| anyhow::anyhow!("export needs an external parent directory"))?;
-    // Inside a batch container the source tree may not be mounted; then it
-    // cannot contain `directory`, so the guard has nothing to protect against.
+    // A missing source tree cannot contain `directory`, so the guard is skipped.
     let repository = match repository.canonicalize() {
         Ok(path) => Some(path),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
@@ -182,7 +181,7 @@ pub fn export(
         .enumerate()
     {
         let main = chip.air.width();
-        let prep = <_ as p3_air::BaseAir<F>>::preprocessed_width(&chip.air);
+        let prep = BaseAir::<F>::preprocessed_width(&chip.air);
         // Exported lookups carry no scope and the native folder evaluates every
         // bus locally, so a chip with any global-scope lookup must not export.
         assert!(

@@ -102,12 +102,17 @@ if manifest.get('closing_module_runtime_hash'):
         require(!accepted,"tail accepted unapproved closing module with a valid context");
     }
 '''.replace('CONTEXT_BYTES',str(CONTEXT_BYTES))
-    # verify() cannot be overridden (it is non-virtual in the generated entry), so the
-    # harness copies its body up to the final _finish call and returns the context instead.
+    # verify() is not virtual in the generated entry, so the harness cannot override it.
+    # It copies the body of verify() up to `return _finish(context);` and returns the
+    # context instead. _finish sets the context length to the fixed packet size before
+    # use, and the harness sets the same length before returning.
     generated=(a.build/'src'/'CompiledTerminalVerifier.sol').read_text()
-    verify_start=generated.index('function verify(bytes calldata wire, bytes32 outputDigest) external view override returns (bool) {')
-    verify_stop=generated.index('return _finish(context);',verify_start)
-    verify_body=generated[verify_start:verify_stop].split('{',1)[1]
+    verify_signature='function verify(bytes calldata wire, bytes32 outputDigest) external view override returns (bool) {'
+    finish_call='return _finish(context);'
+    assert generated.count(verify_signature)==1 and generated.count(finish_call)==1, 'generated verify() layout changed'
+    verify_start=generated.index(verify_signature)
+    verify_stop=generated.index(finish_call,verify_start)
+    verify_body=generated[verify_start+len(verify_signature):verify_stop]
     closing_harness=f'''
 contract ClosingContextHarness is CompiledTerminalVerifier {{
     constructor(address[] memory modules,address whir,address closing) CompiledTerminalVerifier(modules,whir,closing) {{}}

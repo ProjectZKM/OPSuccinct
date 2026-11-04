@@ -144,7 +144,6 @@ fn main() -> anyhow::Result<()> {
     )?;
     let profile = Profile::from_trusted_proof(&shrink.vk, &shrink.proof, Mode::Raw, derived)?;
     let packet = profile.encode(&shrink.proof)?;
-    std::fs::write(out.join("raw.bin"), &packet)?;
     let statement = serde_json::json!({
         "output_digest": format!("0x{}", hex::encode(public_values.hash())),
         "profile_id": format!("0x{}", hex::encode(profile.id())),
@@ -157,47 +156,15 @@ fn main() -> anyhow::Result<()> {
         out.join("statement.json"),
         serde_json::to_vec_pretty(&statement)?,
     )?;
-    // Each mode variant has its own packet and manifest for the Solidity
-    // reader's parity tests (`<name>.bin` with `<name>.json`).
-    for (name, variant_mode, variant_derived) in [
+    // Every mode variant gets a packet and manifest for the Solidity reader's
+    // parity tests. `raw.bin` is the variant that `statement.json` describes.
+    for (name, mode, variant_derived) in [
         ("raw", Mode::Raw, derived),
         ("shared", Mode::Shared, derived),
         ("dag", Mode::Dag, derived),
         ("dag-derived", Mode::Dag, true),
     ] {
-        let variant = Profile::from_trusted_proof(
-            &shrink.vk,
-            &shrink.proof,
-            variant_mode,
-            variant_derived,
-        )?;
-        let bytes = variant.encode(&shrink.proof)?;
-        std::fs::write(out.join(format!("{name}.bin")), &bytes)?;
-        let leaves: Vec<_> = variant
-            .leaves
-            .iter()
-            .map(|leaf| {
-                serde_json::json!({
-                    "field_start": leaf.field_start,
-                    "field_count": leaf.field_count,
-                })
-            })
-            .collect();
-        let manifest = serde_json::json!({
-            "mode": variant_mode as u8,
-            "derived_sumchecks": variant_derived,
-            "profile_id": format!("0x{}", hex::encode(variant.id())),
-            "field_count": variant.field_count,
-            "digest_references": variant.digest_references,
-            "leaf_count": leaves.len(),
-            "leaves": leaves,
-            "witness_digest": format!("0x{}", hex::encode(variant.witness_digest(&shrink.proof)?)),
-            "packet_bytes": bytes.len(),
-        });
-        std::fs::write(
-            out.join(format!("{name}.json")),
-            serde_json::to_vec_pretty(&manifest)?,
-        )?;
+        write_variant(&out, name, &shrink, mode, variant_derived)?;
     }
     eprintln!(
         "exported {} packet bytes ({} fields, {} hashes) to {} in {:?}",
@@ -207,6 +174,45 @@ fn main() -> anyhow::Result<()> {
         out.display(),
         started.elapsed()
     );
+    Ok(())
+}
+
+/// Writes `<name>.bin` (the packet) and `<name>.json` (its manifest) for one mode.
+fn write_variant(
+    out: &Path,
+    name: &str,
+    shrink: &ZKMReduceProof<Shrink>,
+    mode: Mode,
+    derived: bool,
+) -> anyhow::Result<()> {
+    let variant = Profile::from_trusted_proof(&shrink.vk, &shrink.proof, mode, derived)?;
+    let bytes = variant.encode(&shrink.proof)?;
+    std::fs::write(out.join(format!("{name}.bin")), &bytes)?;
+    let leaves: Vec<_> = variant
+        .leaves
+        .iter()
+        .map(|leaf| {
+            serde_json::json!({
+                "field_start": leaf.field_start,
+                "field_count": leaf.field_count,
+            })
+        })
+        .collect();
+    let manifest = serde_json::json!({
+        "mode": mode as u8,
+        "derived_sumchecks": derived,
+        "profile_id": format!("0x{}", hex::encode(variant.id())),
+        "field_count": variant.field_count,
+        "digest_references": variant.digest_references,
+        "leaf_count": leaves.len(),
+        "leaves": leaves,
+        "witness_digest": format!("0x{}", hex::encode(variant.witness_digest(&shrink.proof)?)),
+        "packet_bytes": bytes.len(),
+    });
+    std::fs::write(
+        out.join(format!("{name}.json")),
+        serde_json::to_vec_pretty(&manifest)?,
+    )?;
     Ok(())
 }
 
