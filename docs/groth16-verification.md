@@ -56,16 +56,22 @@ anvil --host 127.0.0.1 --port 18602 --hardfork osaka --enable-tx-gas-limit \
 
 ## 1. Produce the proof
 
-The export example runs setup, core proving, compression, native shrink, `wrap_bn254` and
-`wrap_groth16_bn254` on the CPU. It writes the Groth16 proof as JSON.
+The export example runs on the CPU. `prove` runs setup, core proving, compression and native
+shrink, and saves `shrink.bin` and `public_values.bin` to a directory. `replay` wraps a saved
+`shrink.bin` with `wrap_bn254` and `wrap_groth16_bn254`, so the Groth16 step can be rerun
+without proving again.
 
 ```sh
 cargo build --release -p ziren-groth16-export --example export_groth16
-EXPORT_OUT=$WORK/groth16_proof.json \
-  $WORK/target/release/examples/export_groth16 $ELF $CIRC 10
+$WORK/target/release/examples/export_groth16 prove $ELF $WORK/proof 10
+$WORK/target/release/examples/export_groth16 replay $WORK/proof $CIRC $WORK/groth16_proof.json
 ```
 
-The last line of output is `GROTH16_OK raw_proof_bytes=648 out=...`. `wrap_groth16_bn254`
+`groth16` runs `prove` and `replay` in one process and writes only the proof JSON. It does not
+write `public_values.bin`, which step 2 needs, so use `prove` and `replay` when you plan to run
+step 2.
+
+The `replay` line prints `GROTH16_OK raw_proof_bytes=648 out=...`. `wrap_groth16_bn254`
 also runs gnark's own verification before returning, so a successful run is already
 an internal check.
 
@@ -135,7 +141,7 @@ Gas depends on the build, so the figures in section 4 are the ones from that run
 
 ```sh
 cd contracts/ziren-groth16-verifier
-forge test --match-contract ZirenGroth16ProofVerifierTest
+forge test
 ```
 
 `ZirenGroth16ProofVerifierTest` uses a mock verifier. It checks the packet length and selector, the

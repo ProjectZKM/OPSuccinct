@@ -3076,10 +3076,12 @@ name = "ziren-groth16-export"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "serde_json",
  "zkm-core-executor",
  "zkm-core-machine",
  "zkm-pcs",
+ "zkm-primitives",
  "zkm-prover",
 ]
 
