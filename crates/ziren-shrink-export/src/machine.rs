@@ -212,13 +212,12 @@ pub fn export(
         let mut inputs = opening.main.local.clone();
         inputs.extend(&opening.preprocessed.local);
         inputs.extend(shrink.proof.public_values.iter().copied().map(E::from));
-        let expected =
-            zkm_pcs::shard_level::constraint_folder::eval_constraints_shard_host(
-                chip,
-                opening,
-                alpha,
-                &shrink.proof.public_values,
-            );
+        let expected = zkm_pcs::shard_level::constraint_folder::eval_constraints_shard_host(
+            chip,
+            opening,
+            alpha,
+            &shrink.proof.public_values,
+        );
         assert_eq!(
             rpn.run(&inputs, &roots, alpha),
             expected,
@@ -246,10 +245,9 @@ pub fn export(
             let mut inputs = changed.main.local.clone();
             inputs.extend(&changed.preprocessed.local);
             inputs.extend(pv.iter().copied().map(E::from));
-            let expected =
-                zkm_pcs::shard_level::constraint_folder::eval_constraints_shard_host(
-                    chip, &changed, alpha, &pv,
-                );
+            let expected = zkm_pcs::shard_level::constraint_folder::eval_constraints_shard_host(
+                chip, &changed, alpha, &pv,
+            );
             assert_eq!(
                 rpn.run(&inputs, &roots, alpha),
                 expected,

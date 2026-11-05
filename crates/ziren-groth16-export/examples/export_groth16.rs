@@ -9,7 +9,10 @@ use zkm_prover::{components::DefaultProverComponents, NativeShrink, ZKMProver};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    anyhow::ensure!(args.len() >= 2, "usage: export_groth16 <elf> <circuit dir> [input]");
+    anyhow::ensure!(
+        args.len() >= 2,
+        "usage: export_groth16 <elf> <circuit dir> [input]"
+    );
     let elf = std::fs::read(&args[0])?;
     let circuit_dir = PathBuf::from(&args[1]);
     let input: u32 = args.get(2).map(|s| s.parse()).transpose()?.unwrap_or(10);
@@ -38,6 +41,9 @@ fn main() -> anyhow::Result<()> {
     eprintln!("[export] wrap_groth16_bn254 {:?}", started.elapsed());
     let out = std::env::var("EXPORT_OUT").unwrap_or_else(|_| "groth16_proof.json".into());
     std::fs::write(&out, serde_json::to_vec_pretty(&groth16)?)?;
-    println!("GROTH16_OK raw_proof_bytes={} out={out}", groth16.raw_proof.len());
+    println!(
+        "GROTH16_OK raw_proof_bytes={} out={out}",
+        groth16.raw_proof.len()
+    );
     Ok(())
 }
