@@ -128,7 +128,7 @@ gas, not `cast estimate`: the adapter catches the verifier's revert and returns 
 estimate does not reflect a valid proof.
 
 The script builds with `contracts/ziren-groth16-verifier/foundry.toml` (solc 0.8.30, optimizer on).
-The verifier's deployment figure in section 6 comes from an optimizer-off build, and the same proof
+The verifier's deployment figure in section 4 comes from an optimizer-off build, and the same proof
 with this script gave 1,135,523 gas for the verifier deployment and 233,498 for the verification
 transaction. Gas depends on the build, so use the figures from your own run.
 
@@ -143,7 +143,7 @@ These use a mock verifier. They check the packet length and selector, the digest
 and the forwarding of the proof and the three public inputs. They do not check the
 Groth16 proof itself; section 2 does that.
 
-## 6. Measured values
+## 4. Measured values
 
 Measured on 2026-11-05 on a local Osaka Anvil node (`--gas-limit 60000000`), with the
 fibonacci proof (input 10) and the verifier compiled with solc 0.8.30.
