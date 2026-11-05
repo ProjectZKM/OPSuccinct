@@ -25,14 +25,42 @@ Deployment can span transactions. Each proof verification supplies the complete
 packet in one transaction; partial upload or intermediate verification state is
 not part of this design.
 
-Measured on 2026-10-21 for Ethereum block 26240087 (an EthProofs Ziren proof),
-on a local Osaka Anvil node that enforces the 16,777,216-gas transaction cap:
+Measured on 2026-11-05 for a complete shrink proof (206,726-byte raw packet) on a
+local Osaka Anvil node that enforces the 16,777,216-gas transaction cap:
 
 | Cost | Gas |
 | --- | --- |
-| Verification transaction | 13,668,039 |
-| of which calldata (182 KB packet) | 2,834,640 |
-| Deployment, all modules | 141,599,268 |
+| Verification transaction | 13,751,027 |
+| of which calldata (207 KB packet) | 3,173,300 |
+| Deployment, all modules | 144,547,906 |
+
+The same build and proof forked from Sepolia (block 12066266, public RPC) give
+identical gas figures.
+
+With the lossless field zero-run and full-hash dictionary transport
+(`measure.py --zero-runs`, same build and proof), the packet shrinks to 182,190
+bytes and the verification transaction is cheaper; deployment is unchanged:
+
+| Cost | Gas |
+| --- | --- |
+| Verification transaction | 13,628,720 |
+| of which calldata (182 KB packet) | 2,845,696 |
+| Deployment, all modules | 144,547,906 |
+
+The Groth16 terminal is served by `ZirenGroth16ProofVerifier`
+(`contracts/ziren-groth16-verifier`), which calls the Ziren Groth16
+verifier compiled with solc 0.8.30 and the optimizer enabled. Measured on
+2026-11-05 for a Groth16 proof of the fibonacci guest (input 10) on a local Osaka
+Anvil node (`--gas-limit 60000000`):
+
+| Cost | Gas |
+| --- | --- |
+| Verification transaction | 233,450 |
+| of which calldata (388-byte `verify` call, 260-byte packet) | 5,092 |
+| Deployment, Groth16Verifier | 1,135,523 |
+| Deployment, ZirenGroth16ProofVerifier | 326,771 |
+
+The verification transaction leaves 207,358 gas for execution.
 
 For a fixed approved profile, proof geometry does not grow with the guest
 workload. Exact gas still depends on the build and encoded packet; the Ethereum

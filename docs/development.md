@@ -141,4 +141,5 @@ WIRE_FIXTURE=$WORK/proof NATIVE_BUILD=$WORK/build \
 For more differential checks against independent checkpoint vectors, run
 `contracts/ziren-shrink-verifier/native/run-tests.py` and drop `--skip-checkpoints`.
 
-The bridge integration is described in [bridge.md](bridge.md).
+The bridge integration is described in [bridge.md](bridge.md). The Groth16 terminal
+is verified step by step in [groth16-verification.md](groth16-verification.md).
