@@ -1,19 +1,29 @@
 #!/usr/bin/env python3
-"""Check that all Ziren dependencies resolve to the exact Cargo.toml revision."""
+"""Check the Ziren dependency pin.
+
+All shared Ziren dependencies must use one repository and one rev, branch, or
+tag, and Cargo.lock must resolve them to a single commit.
+"""
 from pathlib import Path
 import tomllib
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+REF_KEYS = ('rev', 'branch', 'tag')
+
+
+def git_ref(dep):
+    for key in REF_KEYS:
+        if key in dep:
+            return key, dep[key]
+    return None, None
 
 
 def check_pin(root=ROOT):
     manifest = tomllib.loads((root / 'Cargo.toml').read_text())
-    reference = manifest['workspace']['dependencies']['zkm-prover']
-    repository, revision = reference['git'], reference['rev']
-    if len(revision) != 40 or any(c not in '0123456789abcdef' for c in revision):
-        raise ValueError('Ziren revision must be a full lowercase Git commit ID')
     dependencies = manifest['workspace']['dependencies']
+    reference = dependencies['zkm-prover']
+    repository = reference['git']
     expected = {
         'zkm-pcs', 'zkm-prover', 'zkm-core-machine', 'zkm-core-executor',
         'zkm-recursion-core', 'zkm-primitives',
@@ -22,21 +32,27 @@ def check_pin(root=ROOT):
               if isinstance(dep, dict) and dep.get('git') == repository}
     if not expected.issubset(actual):
         raise ValueError('shared Ziren workspace dependencies are missing or use another repository')
-    for name in actual:
-        if dependencies[name].get('rev') != revision:
-            raise ValueError(f'{name}: Cargo.toml differs from the shared Ziren pin')
+    refs = {name: git_ref(dependencies[name]) for name in actual}
+    if len(set(refs.values())) != 1:
+        raise ValueError(f'shared Ziren dependencies disagree on rev/branch: {refs}')
+    key, value = next(iter(refs.values()))
+    if key == 'rev' and (len(value) != 40 or any(c not in '0123456789abcdef' for c in value)):
+        raise ValueError('Ziren revision must be a full lowercase Git commit ID')
     resolved = tomllib.loads((root / 'Cargo.lock').read_text())
-    packages = []
+    commits = {}
     for package in resolved['package']:
         source = package.get('source', '')
         if source.startswith('git+' + repository + '?'):
             parsed = urlsplit(source[4:])
-            if parse_qs(parsed.query).get('rev') != [revision] or parsed.fragment != revision:
-                raise ValueError(f'{package["name"]}: Cargo.lock differs from the shared Ziren pin')
-            packages.append(package['name'])
-    if not actual.issubset(packages):
+            commits.setdefault(parsed.fragment, []).append(package['name'])
+    if len(commits) != 1:
+        raise ValueError(f'Cargo.lock resolves shared Ziren dependencies to several commits: {sorted(commits)}')
+    commit = next(iter(commits))
+    if key == 'rev' and commit != value:
+        raise ValueError('Cargo.lock differs from the shared Ziren rev')
+    if not actual.issubset(commits[commit]):
         raise ValueError('Cargo.lock does not resolve all shared Ziren dependencies')
-    return revision
+    return f'{key}={value} (lock commit {commit})'
 
 
 if __name__ == '__main__':

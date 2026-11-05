@@ -75,6 +75,7 @@ if manifest.get('contiguous_results'):
     assert dense_test.count('DENSE_DRIVER')==1
     (tests/'NativeDenseFrames.t.sol').write_text(dense_test.replace('DENSE_DRIVER',dense_driver_source([[0,1,3],[1,4]],5)))
 native_test=(root/'NativeTerminal.t.sol.in').read_text()
+extra_contracts=''
 if manifest.get('closing_module_runtime_hash'):
     native_test=native_test.replace('contract NativeTerminalTest {','import {NativeClosingEvaluator} from "../src/NativeClosingEvaluator.sol";\ncontract NativeTerminalTest {\n    NativeClosingEvaluator closing;')
     native_test=native_test.replace('        tail=new CompiledWhirVerifier();','        closing=new NativeClosingEvaluator();\n        require(address(closing).code.length<=24576,"closing EIP170 violation");\n        tail=new CompiledWhirVerifier();')
@@ -88,16 +89,39 @@ if manifest.get('closing_module_runtime_hash'):
             depth+=(native_test[end]=='(')-(native_test[end]==')');end+=1
         native_test=native_test[:end-1]+',address(closing)'+native_test[end-1:]
         at=end+len(',address(closing)')
+    CONTEXT_BYTES=manifest['packet_offset']+manifest['proof_bytes']
     closing_test='''
     function testClosingCodeHashBinding() public {
         try new CompiledTerminalVerifier(modules,address(tail),modules[0]) returns(CompiledTerminalVerifier){revert("wrong closing module accepted");}
         catch(bytes memory error){require(keccak256(error)==keccak256(abi.encodeWithSignature("Error(string)","closing code hash")),"wrong constructor failure");}
-        bytes memory fake=new bytes(CONTEXT_BYTES);
-        (bool ok,bytes memory error)=address(tail).staticcall(abi.encodeCall(tail.verifyContext,(fake,modules[0])));
-        require(!ok && keccak256(error)==keccak256(abi.encodeWithSignature("Error(string)","closing code hash")),"tail accepted unapproved closing module");
+        ClosingContextHarness harness=new ClosingContextHarness(modules,address(tail),address(closing));
+        bytes memory context=harness.captureContext(packet,digest);
+        require(context.length==CONTEXT_BYTES,"closing context length");
+        require(tail.verifyContext(context,address(closing)),"approved closing module rejected a valid context");
+        (bool accepted,)=address(tail).staticcall(abi.encodeCall(tail.verifyContext,(context,modules[0])));
+        require(!accepted,"tail accepted unapproved closing module with a valid context");
     }
-'''.replace('CONTEXT_BYTES',str(manifest['packet_offset']+manifest['proof_bytes']))
+'''.replace('CONTEXT_BYTES',str(CONTEXT_BYTES))
+    # verify() is not virtual in the generated entry, so the harness cannot override it.
+    # It copies the body of verify() up to `return _finish(context);` and returns the
+    # context instead. _finish sets the context length to the fixed packet size before
+    # use, and the harness sets the same length before returning.
+    generated=(a.build/'src'/'CompiledTerminalVerifier.sol').read_text()
+    verify_signature='function verify(bytes calldata wire, bytes32 outputDigest) external view override returns (bool) {'
+    finish_call='return _finish(context);'
+    assert generated.count(verify_signature)==1 and generated.count(finish_call)==1, 'generated verify() layout changed'
+    verify_start=generated.index(verify_signature)
+    verify_stop=generated.index(finish_call,verify_start)
+    verify_body=generated[verify_start+len(verify_signature):verify_stop]
+    closing_harness=f'''
+contract ClosingContextHarness is CompiledTerminalVerifier {{
+    constructor(address[] memory modules,address whir,address closing) CompiledTerminalVerifier(modules,whir,closing) {{}}
+    function captureContext(bytes calldata wire,bytes32 outputDigest) external view returns(bytes memory) {{{verify_body}assembly("memory-safe"){{mstore(context,{CONTEXT_BYTES})}}return context;
+    }}
+}}
+'''
     end=native_test.rfind('}');native_test=native_test[:end]+closing_test+native_test[end:]
+    extra_contracts=closing_harness
 if manifest.get('entry_creation_hash'):
     # Test the exact independently compiled entry creation bytecode. Keeping
     # Forge's tail/math settings at runs=1 preserves their pinned code hashes.
@@ -211,7 +235,7 @@ if manifest.get('zero_run_fields'):
     }
 '''.replace('INVALID_COUNT',str(count))
     end=native_test.rfind('}');native_test=native_test[:end]+added+native_test[end:]
-(tests/'NativeTerminal.t.sol').write_text(native_test)
+(tests/'NativeTerminal.t.sol').write_text(native_test+extra_contracts)
 if manifest.get('packed_canonical'):
     (tests/'NativeCanonical.t.sol').write_text('''// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
