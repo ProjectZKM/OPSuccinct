@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IZirenShrinkVerifier} from "./interfaces/IZirenShrinkVerifier.sol";
+import {IZirenProofVerifier} from "./interfaces/IZirenProofVerifier.sol";
 import {MetisAggregationOutputs} from "./lib/Types.sol";
 import {IChainStorageContainer, IMVMStateCommitmentChain} from "./metis/IMVMStateCommitmentChain.sol";
 import {Lib_OVMCodec} from "./metis/Lib_OVMCodec.sol";
@@ -169,7 +169,7 @@ contract MetisOPSuccinctL2OutputOracle {
             rangeVkeyCommitment: config.rangeVkeyCommitment,
             proverAddress: _proverAddress
         });
-        if (!IZirenShrinkVerifier(config.verifier).verify(_proof, sha256(abi.encode(publicValues)))) {
+        if (!IZirenProofVerifier(config.verifier).verify(_proof, sha256(abi.encode(publicValues)))) {
             revert InvalidProof();
         }
 

@@ -47,6 +47,22 @@ bytes and the verification transaction is cheaper; deployment is unchanged:
 | of which calldata (182 KB packet) | 2,845,696 |
 | Deployment, all modules | 144,547,906 |
 
+The Groth16 terminal is served by `ZirenGroth16ProofVerifier`
+(`contracts/ziren-groth16-verifier`), which calls the Ziren Groth16
+verifier compiled with solc 0.8.30. Measured on 2026-11-05 for the route-A
+Groth16 proof of the fibonacci guest (input 10) on a local Osaka Anvil node
+(`--gas-limit 60000000`):
+
+| Cost | Gas |
+| --- | --- |
+| Verification transaction | 233,581 |
+| of which calldata (260-byte packet) | 5,140 |
+| Deployment, Groth16Verifier and adapter | 2,265,168 |
+
+The verification transaction leaves 207,441 gas for execution. Deployment is
+1,938,397 for the verifier and 326,771 for the adapter. A direct
+`Groth16Verifier.Verify` transaction for the same proof costs 228,228 gas.
+
 For a fixed approved profile, proof geometry does not grow with the guest
 workload. Exact gas still depends on the build and encoded packet; the Ethereum
 fixture above is not a complete Metis oracle measurement. Rerun for each approved

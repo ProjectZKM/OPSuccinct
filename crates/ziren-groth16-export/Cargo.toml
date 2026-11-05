@@ -1,0 +1,17 @@
+[package]
+name = "ziren-groth16-export"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+zkm-pcs = { workspace = true }
+zkm-prover = { workspace = true }
+zkm-core-machine = { workspace = true }
+zkm-core-executor = { workspace = true }
+
+[[example]]
+name = "export_groth16"

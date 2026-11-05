@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ziren-shrink-export"]
+members = ["crates/ziren-shrink-export", "crates/ziren-groth16-export"]
 resolver = "2"
 
 [workspace.package]
