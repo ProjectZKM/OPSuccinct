@@ -56,22 +56,31 @@ anvil --host 127.0.0.1 --port 18602 --hardfork osaka --enable-tx-gas-limit \
 
 ## 1. Produce the proof
 
-The export example runs on the CPU. `prove` runs setup, core proving, compression and native
-shrink, and saves `shrink.bin` and `public_values.bin` to a directory. `replay` wraps a saved
-`shrink.bin` with `wrap_bn254` and `wrap_groth16_bn254`, so the Groth16 step can be rerun
-without proving again.
+The export example runs on the CPU. `prove` runs core proving, compression, native shrink,
+`wrap_bn254` and `wrap_groth16_bn254`. It writes `compressed.bin` and `public_values.bin` (step 2
+needs the latter) and `groth16_proof.json` to a directory.
 
 ```sh
 cargo build --release -p ziren-groth16-export --example export_groth16
-$WORK/target/release/examples/export_groth16 prove $ELF $WORK/proof 10
-$WORK/target/release/examples/export_groth16 replay $WORK/proof $CIRC $WORK/groth16_proof.json
+$WORK/target/release/examples/export_groth16 prove $ELF $CIRC $WORK/proof 10
 ```
 
-`groth16` runs `prove` and `replay` in one process and writes only the proof JSON. It does not
-write `public_values.bin`, which step 2 needs, so use `prove` and `replay` when you plan to run
-step 2.
+`replay` reads `groth16_proof.json` from that directory and checks its layout, without proving or
+wrapping anything:
 
-The `replay` line prints `GROTH16_OK raw_proof_bytes=648 out=...`. `wrap_groth16_bn254`
+```sh
+$WORK/target/release/examples/export_groth16 replay $WORK/proof
+```
+
+`groth16` takes a saved compressed proof (`compressed.bin`, or an SDK compressed proof) and runs the
+native shrink and both wraps, without proving the guest again. It overwrites `groth16_proof.json` in the same directory:
+
+```sh
+$WORK/target/release/examples/export_groth16 groth16 $WORK/proof/compressed.bin $CIRC $WORK/proof/groth16_proof.json
+```
+
+The `prove` and `groth16` lines print `GROTH16_OK raw_proof_bytes=648 out=...`; `replay` prints
+`REPLAY_OK selector=0x... public_inputs=3 raw_proof_bytes=648 path=...`. `wrap_groth16_bn254`
 also runs gnark's own verification before returning, so a successful run is already
 an internal check.
 
@@ -93,7 +102,7 @@ The exported JSON has these fields:
 `Groth16Verifier` and `ZirenGroth16ProofVerifier`, and checks the proof:
 
 ```sh
-python3 scripts/groth16_verify.py --proof $WORK/groth16_proof.json \
+python3 scripts/groth16_verify.py --proof $WORK/proof/groth16_proof.json \
   --public-values $WORK/proof/public_values.bin \
   --rpc $RPC --report $WORK/groth16_report.json
 ```

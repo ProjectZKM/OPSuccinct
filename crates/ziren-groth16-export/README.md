@@ -7,24 +7,29 @@ Export of the Groth16 terminal: native shrink, `wrap_bn254` and
 ## Modes
 
 ```sh
-export_groth16 prove <guest.elf> <out dir> [u32 input]
-export_groth16 replay <dir with shrink.bin> <circuit dir> <out.json>
-export_groth16 groth16 <guest.elf> <circuit dir> <out.json> [u32 input]
+export_groth16 prove <guest.elf> <circuit dir> <out dir> [u32 input]
+export_groth16 groth16 <compressed proof.bin> <circuit dir> <out.json>
+export_groth16 replay <prove out dir>
 ```
 
-- `prove` runs setup, core proving, compression and native shrink. It writes
-  `shrink.bin` and `public_values.bin` to `<out dir>`.
-- `replay` loads a saved `shrink.bin` and runs `wrap_bn254` and
-  `wrap_groth16_bn254`, so the Groth16 step can be rerun without proving again.
-- `groth16` runs `prove` and `replay` in one process. It writes only the proof
-  JSON, not `public_values.bin`.
+- `prove` runs core proving, compression, native shrink, `wrap_bn254` and
+  `wrap_groth16_bn254`. It writes `compressed.bin`, `public_values.bin` and
+  `groth16_proof.json` to `<out dir>`. `public_values.bin` is the input to
+  `scripts/groth16_verify.py`.
+- `groth16` takes a saved compressed proof, either `compressed.bin` or an SDK
+  compressed proof, and runs the native shrink and both wraps without proving
+  the guest again. It writes the Groth16 proof to `<out.json>`.
+- `replay` reads `groth16_proof.json` from a `prove` output directory and checks
+  its layout: the encoded proof is 256 bytes, and it prints the verifier selector,
+  the number of public inputs and the raw proof size. It runs no proving and no wrap,
+  and it does not verify the proof cryptographically.
 
-The default input is 10. The Groth16 modes read the circuit artifacts from
-`<circuit dir>`, and every mode runs on the CPU.
+The default input is 10. Every mode runs on the CPU. `prove` and `groth16` read the Groth16
+circuit artifacts from `<circuit dir>`.
 
-Each Groth16 mode writes the proof as JSON, which
-`scripts/groth16_args.py` and `scripts/groth16_verify.py` read. The
-`replay` and `groth16` modes print `GROTH16_OK raw_proof_bytes=... out=...` on success.
+`prove` and `groth16` write the proof as JSON, which `scripts/groth16_args.py` and
+`scripts/groth16_verify.py` read. A successful `prove` or `groth16` run prints
+`GROTH16_OK raw_proof_bytes=... out=...`; `replay` prints `REPLAY_OK ...`.
 
 The Solidity verifier and adapter live in
 [contracts/ziren-groth16-verifier](../../contracts/ziren-groth16-verifier/).

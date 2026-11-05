@@ -1,95 +1,96 @@
-//! Export a Groth16 terminal proof: native shrink, `wrap_bn254`, then
-//! `wrap_groth16_bn254`. Runs on the CPU.
+//! Export a Groth16 terminal proof on the CPU: native shrink, `wrap_bn254`, then
+//! `wrap_groth16_bn254`.
 //!
 //! Usage:
-//!   export_groth16 prove <guest.elf> <out dir> [u32 input]
-//!   export_groth16 replay <dir with shrink.bin> <circuit dir> <out.json>
-//!   export_groth16 groth16 <guest.elf> <circuit dir> <out.json> [u32 input]
+//!   export_groth16 prove <guest.elf> <circuit dir> <out dir> [u32 input]
+//!   export_groth16 groth16 <compressed proof.bin> <circuit dir> <out.json>
+//!   export_groth16 replay <prove out dir>
 //!
-//! `prove` writes `shrink.bin` and `public_values.bin` to `<out dir>`. `replay`
-//! wraps a saved `shrink.bin` without proving again. `groth16` proves and wraps
-//! in one run. Each Groth16 mode writes the proof as JSON for
-//! `scripts/groth16_args.py`.
-use std::path::{Path, PathBuf};
+//! `prove` runs core proving, compression, native shrink and both wraps. It
+//! writes `compressed.bin` and `public_values.bin` (for `groth16_verify.py`) and
+//! `groth16_proof.json` to `<out dir>`. `groth16` takes a saved compressed proof,
+//! such as `compressed.bin` or an SDK compressed proof, and runs the shrink and
+//! both wraps. `replay` reads the Groth16 proof that `prove` wrote to its out
+//! dir and checks its layout, without running any proving.
+use std::path::Path;
 use std::time::Instant;
 use zkm_core_executor::ZKMContext;
 use zkm_core_machine::io::ZKMStdin;
 use zkm_core_machine::reduce::ZKMReduceProof;
 use zkm_pcs::ZKMProverOpts;
 use zkm_primitives::io::ZKMPublicValues;
-use zkm_prover::{components::DefaultProverComponents, NativeShrink, ShrinkSC, ZKMProver};
+use zkm_prover::{
+    components::DefaultProverComponents, CompressedSC, Groth16Bn254Proof, NativeShrink, ZKMProver,
+};
+
+/// Hex digits in the 256-byte `encoded_proof` field of the Groth16 proof.
+const ENCODED_PROOF_HEX_LEN: usize = 512;
 
 const USAGE: &str = "usage:
-  export_groth16 prove <guest.elf> <out dir> [u32 input]
-  export_groth16 replay <dir with shrink.bin> <circuit dir> <out.json>
-  export_groth16 groth16 <guest.elf> <circuit dir> <out.json> [u32 input]";
+  export_groth16 prove <guest.elf> <circuit dir> <out dir> [u32 input]
+  export_groth16 groth16 <compressed proof.bin> <circuit dir> <out.json>
+  export_groth16 replay <prove out dir>";
 
 type Prover = ZKMProver<DefaultProverComponents>;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    anyhow::ensure!(args.len() >= 3, USAGE);
+    anyhow::ensure!(args.len() >= 2, USAGE);
     let started = Instant::now();
     let prover = Prover::uninitialized_with(Some(true));
 
     match args[0].as_str() {
         "prove" => {
-            let out_dir = PathBuf::from(&args[2]);
-            std::fs::create_dir_all(&out_dir)?;
-            let (shrink, public_values) =
-                prove_shrink(&prover, Path::new(&args[1]), input_arg(&args, 3)?, started)?;
-            std::fs::write(out_dir.join("shrink.bin"), bincode::serialize(&shrink)?)?;
-            std::fs::write(
-                out_dir.join("public_values.bin"),
-                bincode::serialize(&public_values)?,
-            )?;
-            println!("SHRINK_OK out={}", out_dir.display());
-        }
-        "replay" => {
             anyhow::ensure!(args.len() >= 4, USAGE);
-            let shrink: ZKMReduceProof<ShrinkSC> =
-                bincode::deserialize(&std::fs::read(Path::new(&args[1]).join("shrink.bin"))?)?;
-            wrap_to_json(
+            let input = args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(10);
+            prove(
                 &prover,
-                shrink,
+                Path::new(&args[1]),
                 Path::new(&args[2]),
                 Path::new(&args[3]),
+                input,
                 started,
             )?;
         }
         "groth16" => {
             anyhow::ensure!(args.len() >= 4, USAGE);
-            let (shrink, _) =
-                prove_shrink(&prover, Path::new(&args[1]), input_arg(&args, 4)?, started)?;
-            wrap_to_json(
+            let compressed = read_compressed(Path::new(&args[1]))?;
+            groth16_from_compressed(
                 &prover,
-                shrink,
+                compressed,
                 Path::new(&args[2]),
                 Path::new(&args[3]),
                 started,
             )?;
+        }
+        "replay" => {
+            let path = Path::new(&args[1]).join("groth16_proof.json");
+            let groth16: Groth16Bn254Proof = serde_json::from_slice(&std::fs::read(&path)?)?;
+            anyhow::ensure!(
+                groth16.encoded_proof.len() == ENCODED_PROOF_HEX_LEN,
+                "encoded_proof is {} hex digits, expected {ENCODED_PROOF_HEX_LEN}",
+                groth16.encoded_proof.len()
+            );
+            println!(
+                "REPLAY_OK selector=0x{} public_inputs={} raw_proof_bytes={} path={}",
+                hex_prefix(&groth16.groth16_vkey_hash),
+                groth16.public_inputs.len(),
+                groth16.raw_proof.len(),
+                path.display()
+            );
         }
         other => anyhow::bail!("unknown mode {other}\n{USAGE}"),
     }
     Ok(())
 }
 
-/// The optional guest input at `index`, defaulting to 10.
-fn input_arg(args: &[String], index: usize) -> anyhow::Result<u32> {
-    Ok(args
-        .get(index)
-        .map(|s| s.parse())
-        .transpose()?
-        .unwrap_or(10))
-}
-
-/// Proves the guest and runs the native shrink.
-fn prove_shrink(
+/// Proves the guest and compresses the core proof.
+fn prove_compressed(
     prover: &Prover,
     elf_path: &Path,
     input: u32,
     started: Instant,
-) -> anyhow::Result<(ZKMReduceProof<ShrinkSC>, ZKMPublicValues)> {
+) -> anyhow::Result<(ZKMReduceProof<CompressedSC>, ZKMPublicValues)> {
     let elf = std::fs::read(elf_path)?;
     let (_, pk, program, vk) = prover.setup(&elf);
     eprintln!("[export] setup {:?}", started.elapsed());
@@ -103,20 +104,71 @@ fn prove_shrink(
     let public_values = core.public_values.clone();
     let compressed = prover.compress(&vk, core, vec![], opts)?;
     eprintln!("[export] compressed {:?}", started.elapsed());
-
-    let shrink = prover.shrink_with::<NativeShrink>(compressed, opts)?;
-    eprintln!("[export] native shrink {:?}", started.elapsed());
-    Ok((shrink, public_values))
+    Ok((compressed, public_values))
 }
 
-/// Wraps a shrink proof to BN254 and Groth16, and writes the proof as JSON.
-fn wrap_to_json(
+/// Proves the guest end to end and writes its artifacts to `out_dir`:
+/// `compressed.bin`, `public_values.bin` and `groth16_proof.json`.
+fn prove(
     prover: &Prover,
-    shrink: ZKMReduceProof<ShrinkSC>,
+    elf_path: &Path,
+    circuit_dir: &Path,
+    out_dir: &Path,
+    input: u32,
+    started: Instant,
+) -> anyhow::Result<()> {
+    std::fs::create_dir_all(out_dir)?;
+    let (compressed, public_values) = prove_compressed(prover, elf_path, input, started)?;
+    std::fs::write(
+        out_dir.join("compressed.bin"),
+        bincode::serialize(&compressed)?,
+    )?;
+    std::fs::write(
+        out_dir.join("public_values.bin"),
+        bincode::serialize(&public_values)?,
+    )?;
+    groth16_from_compressed(
+        prover,
+        compressed,
+        circuit_dir,
+        &out_dir.join("groth16_proof.json"),
+        started,
+    )
+}
+
+/// Reads a bincode compressed proof, accepting the SDK wrapper that prefixes
+/// it with a `ZKMProof` enum tag (1 = Compressed).
+fn read_compressed(path: &Path) -> anyhow::Result<ZKMReduceProof<CompressedSC>> {
+    const COMPRESSED_TAG: u32 = 1;
+    let bytes = std::fs::read(path)?;
+    anyhow::ensure!(
+        bytes.len() >= 4,
+        "{} is too short to be a proof",
+        path.display()
+    );
+    let tag = u32::from_le_bytes(bytes[..4].try_into()?);
+    Ok(match tag {
+        COMPRESSED_TAG => bincode::deserialize(&bytes[4..])?,
+        _ => bincode::deserialize(&bytes)?,
+    })
+}
+
+/// The first four bytes of the verifier hash as lowercase hex.
+fn hex_prefix(hash: &[u8; 32]) -> String {
+    hash[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Runs the native shrink, `wrap_bn254` and `wrap_groth16_bn254`, and writes
+/// the Groth16 proof as JSON.
+fn groth16_from_compressed(
+    prover: &Prover,
+    compressed: ZKMReduceProof<CompressedSC>,
     circuit_dir: &Path,
     out: &Path,
     started: Instant,
 ) -> anyhow::Result<()> {
+    let shrink = prover.shrink_with::<NativeShrink>(compressed, ZKMProverOpts::default())?;
+    eprintln!("[export] native shrink {:?}", started.elapsed());
     let wrapped = prover.wrap_bn254(shrink, ZKMProverOpts::default())?;
     eprintln!("[export] wrap_bn254 {:?}", started.elapsed());
 
