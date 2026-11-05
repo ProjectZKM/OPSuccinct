@@ -37,6 +37,16 @@ local Osaka Anvil node that enforces the 16,777,216-gas transaction cap:
 The same build and proof forked from Sepolia (block 12066266, public RPC) give
 identical gas figures.
 
+With the lossless field zero-run and full-hash dictionary transport
+(`measure.py --zero-runs`, same build and proof), the packet shrinks to 182,190
+bytes and the verification transaction is cheaper; deployment is unchanged:
+
+| Cost | Gas |
+| --- | --- |
+| Verification transaction | 13,628,720 |
+| of which calldata (182 KB packet) | 2,845,696 |
+| Deployment, all modules | 144,547,906 |
+
 For a fixed approved profile, proof geometry does not grow with the guest
 workload. Exact gas still depends on the build and encoded packet; the Ethereum
 fixture above is not a complete Metis oracle measurement. Rerun for each approved
