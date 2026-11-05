@@ -25,14 +25,17 @@ Deployment can span transactions. Each proof verification supplies the complete
 packet in one transaction; partial upload or intermediate verification state is
 not part of this design.
 
-Measured on 2026-10-21 for Ethereum block 26240087 (an EthProofs Ziren proof),
-on a local Osaka Anvil node that enforces the 16,777,216-gas transaction cap:
+Measured on 2026-11-05 for a complete shrink proof (206,726-byte raw packet) on a
+local Osaka Anvil node that enforces the 16,777,216-gas transaction cap:
 
 | Cost | Gas |
 | --- | --- |
-| Verification transaction | 13,668,039 |
-| of which calldata (182 KB packet) | 2,834,640 |
-| Deployment, all modules | 141,599,268 |
+| Verification transaction | 13,751,027 |
+| of which calldata (207 KB packet) | 3,173,300 |
+| Deployment, all modules | 144,547,906 |
+
+The same build and proof forked from Sepolia (block 12066266, public RPC) give
+identical gas figures.
 
 For a fixed approved profile, proof geometry does not grow with the guest
 workload. Exact gas still depends on the build and encoded packet; the Ethereum
