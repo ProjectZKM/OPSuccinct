@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IZirenProofVerifier} from "./interfaces/IZirenProofVerifier.sol";
+import {IZirenProofVerifier} from "@ziren-shared/IZirenProofVerifier.sol";
 
 interface IZirenGroth16Verifier {
     function Verify(uint256[8] calldata proof, uint256[3] calldata input) external view;
@@ -14,9 +14,9 @@ interface IZirenGroth16Verifier {
 /// `[application key, committed-value digest, recursion root]`, where the
 /// committed-value digest is the output digest with its top three bits cleared.
 /// The recursion root is the prover's `recursion_vk_root` for the Ziren revision
-/// pinned by this repository, as committed by the shrink. Exit code zero is enforced inside
-/// the recursion core circuit rather than by a public input, so this adapter
-/// does not bind it separately.
+/// pinned by this repository, as committed by the shrink. Exit code zero is
+/// enforced inside the recursion core circuit rather than by a public input, so
+/// this adapter does not bind it separately.
 contract ZirenGroth16ProofVerifier is IZirenProofVerifier {
     uint256 internal constant DIGEST_MASK = (1 << 253) - 1;
     uint256 internal constant PACKET_LENGTH = 4 + 32 * 8;

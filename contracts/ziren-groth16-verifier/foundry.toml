@@ -6,6 +6,8 @@ optimizer = true
 optimizer_runs = 200
 evm_version = "prague"
 fs_permissions = []
+remappings = ["@ziren-shared/=../shared/"]
+allow_paths = ["../shared"]
 
 [fmt]
 ignore = ["test/metis/Lib_MerkleTree.sol"]

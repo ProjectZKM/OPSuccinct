@@ -2,8 +2,8 @@
 
 A Ziren proof is shrunk natively, wrapped to BN254, then wrapped again as a gnark
 Groth16 proof. The proof is checked by the Ziren Groth16 verifier, called through
-`ZirenGroth16ProofVerifier`, which implements `IZirenProofVerifier`, the interface
-`MetisOPSuccinctL2OutputOracle` calls.
+`ZirenGroth16ProofVerifier`, which implements `IZirenProofVerifier` (`contracts/shared/`),
+the interface `MetisOPSuccinctL2OutputOracle` calls.
 
 The shrink path is documented in [development.md](development.md). This document
 covers only the Groth16 terminal.
@@ -128,9 +128,8 @@ gas, not `cast estimate`: the adapter catches the verifier's revert and returns 
 estimate does not reflect a valid proof.
 
 The script builds with `contracts/ziren-groth16-verifier/foundry.toml` (solc 0.8.30, optimizer on).
-The verifier's deployment figure in section 4 comes from an optimizer-off build, and the same proof
-with this script gave 1,135,523 gas for the verifier deployment and 233,498 for the verification
-transaction. Gas depends on the build, so use the figures from your own run.
+Gas depends on the build, so the figures in section 4 are the ones from that run; use your own run's
+`--report` output to compare.
 
 ## 3. Unit tests for the adapter
 
@@ -146,18 +145,17 @@ Groth16 proof itself; section 2 does that.
 ## 4. Measured values
 
 Measured on 2026-11-05 on a local Osaka Anvil node (`--gas-limit 60000000`), with the
-fibonacci proof (input 10) and the verifier compiled with solc 0.8.30.
+fibonacci proof (input 10) and the verifier and adapter built by `contracts/ziren-groth16-verifier/foundry.toml`
+(solc 0.8.30, optimizer on), using `scripts/groth16_verify.py`.
 
 | Cost | Gas |
 | --- | --- |
-| Verification transaction | 233,581 |
+| Verification transaction | 233,498 |
 | of which calldata (260-byte packet) | 5,140 |
-| Deployment, Groth16Verifier and adapter | 2,265,168 |
+| Execution (verification transaction minus 21,000 base and calldata) | 207,358 |
+| Deployment, Groth16Verifier | 1,135,523 |
+| Deployment, ZirenGroth16ProofVerifier | 326,771 |
 
-Execution is 207,441 gas of the verification transaction. Deployment is 1,938,397 for
-the verifier and 326,771 for the adapter. A direct `Groth16Verifier.Verify` transaction
-for the same proof costs 228,228 gas. The figures also appear in
-[the shrink verifier README](../contracts/ziren-shrink-verifier/README.md).
 
 ## Caveats
 

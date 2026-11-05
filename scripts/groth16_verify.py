@@ -10,7 +10,8 @@ The output digest is computed from the committed public values: SHA-256 of the
 bytes after the 8-byte little-endian length prefix in `public_values.bin`. Its top
 three bits are cleared and must equal the proof's `input[1]`.
 
-Usage: python3 scripts/groth16_verify.py --proof <groth16_proof.json> --public-values <public_values.bin>
+Usage: python3 scripts/groth16_verify.py --proof <groth16_proof.json> \
+           --public-values <public_values.bin>
 """
 
 import argparse
@@ -26,7 +27,8 @@ from groth16_args import arguments  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / "contracts" / "ziren-groth16-verifier"
 ANVIL_DEPLOYER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"  # anvil account 0, local node only
-VERIFY_SIG = "verify(bytes,bytes32)"
+ADAPTER_CALL = "verify(bytes,bytes32)(bool)"
+ADAPTER_SEND = "verify(bytes,bytes32)"
 
 
 def output_digest(public_values: Path) -> str:
@@ -42,6 +44,10 @@ def cast(*args: str) -> str:
     if result.returncode != 0:
         sys.exit(f"cast {args[0]} failed: {result.stderr.strip()}")
     return result.stdout.strip()
+
+
+def call(rpc: str, address: str, signature: str, *args: str) -> str:
+    return cast("call", address, signature, *args, "--rpc-url", rpc)
 
 
 def to_int(value) -> int:
@@ -63,8 +69,10 @@ def bytecode(artifact: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--proof", type=Path, required=True, help="groth16_proof.json from export_groth16")
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--proof", type=Path, required=True,
+                        help="groth16_proof.json from export_groth16")
     parser.add_argument("--public-values", type=Path, required=True,
                         help="public_values.bin of the statement the proof commits to")
     parser.add_argument("--rpc", default="http://127.0.0.1:18602")
@@ -74,7 +82,7 @@ def main() -> None:
 
     subprocess.run(["forge", "build", "--silent"], cwd=PROJECT, check=True)
     proof = arguments(json.loads(args.proof.read_text()))
-    app_key, committed, root = proof["inputs"]
+    app_key, committed, root = proof.inputs
     digest = output_digest(args.public_values)
     if int(digest, 16) & ((1 << 253) - 1) != int(committed, 16):
         sys.exit(f"output digest {digest} does not match the proof's committed value {committed}")
@@ -84,43 +92,53 @@ def main() -> None:
         bytecode("Groth16Verifier.sol/Groth16Verifier.json"), 8_000_000,
     )
     ctor = cast("abi-encode", "constructor(address,bytes4,bytes32,uint256)",
-                verifier, proof["selector"], app_key, root)
+                verifier, proof.selector, app_key, root)
     adapter, adapter_gas = deploy(
         args.rpc, args.deployer,
-        bytecode("ZirenGroth16ProofVerifier.sol/ZirenGroth16ProofVerifier.json") + ctor[2:], 5_000_000,
+        bytecode("ZirenGroth16ProofVerifier.sol/ZirenGroth16ProofVerifier.json") + ctor[2:],
+        5_000_000,
     )
 
-    packet = proof["packet"]
+    packet = proof.packet
     flipped = digest[:-1] + ("0" if digest[-1] != "0" else "1")
+    proof_words = f"[{','.join(proof.proof)}]"
+    public_inputs = f"[{','.join(proof.inputs)}]"
+
+    # Each check maps a name to (expected, actual).
     checks = {
         "direct Groth16Verifier.Verify (no revert)": (
             "0x",
-            cast("call", verifier, "Verify(uint256[8],uint256[3])",
-                 "[" + ",".join(proof["proof"]) + "]", "[" + ",".join(proof["inputs"]) + "]",
-                 "--rpc-url", args.rpc),
+            call(args.rpc, verifier, "Verify(uint256[8],uint256[3])", proof_words, public_inputs),
         ),
         "adapter verify": (
-            "true", cast("call", adapter, f"{VERIFY_SIG}(bool)", packet, digest, "--rpc-url", args.rpc),
+            "true",
+            call(args.rpc, adapter, ADAPTER_CALL, packet, digest),
         ),
         "tampered last proof byte": (
-            "false", cast("call", adapter, f"{VERIFY_SIG}(bool)", packet[:-2] + "00", digest, "--rpc-url", args.rpc),
+            "false",
+            call(args.rpc, adapter, ADAPTER_CALL, packet[:-2] + "00", digest),
         ),
         "digest changed": (
-            "false", cast("call", adapter, f"{VERIFY_SIG}(bool)", packet, flipped, "--rpc-url", args.rpc),
+            "false",
+            call(args.rpc, adapter, ADAPTER_CALL, packet, flipped),
         ),
         "selector replaced": (
-            "false", cast("call", adapter, f"{VERIFY_SIG}(bool)", "0x00000000" + packet[10:], digest, "--rpc-url", args.rpc),
+            "false",
+            call(args.rpc, adapter, ADAPTER_CALL, "0x00000000" + packet[10:], digest),
         ),
         "truncated packet": (
-            "false", cast("call", adapter, f"{VERIFY_SIG}(bool)", packet[:100], digest, "--rpc-url", args.rpc),
+            "false",
+            call(args.rpc, adapter, ADAPTER_CALL, packet[:100], digest),
         ),
     }
+
     receipt = json.loads(
         cast("send", "--unlocked", "--from", args.deployer, "--rpc-url", args.rpc,
-             "--gas-limit", "2000000", adapter, VERIFY_SIG, packet, digest, "--json")
+             "--gas-limit", "2000000", adapter, ADAPTER_SEND, packet, digest, "--json")
     )
     verify_gas = to_int(receipt["gasUsed"])
-    verify_status = to_int(receipt["status"]) == 1
+    succeeded = to_int(receipt["status"]) == 1
+    checks["adapter verify transaction"] = ("success", "success" if succeeded else "reverted")
 
     results = {
         "verifier": verifier,
@@ -131,9 +149,11 @@ def main() -> None:
             "verify_transaction": verify_gas,
             "verify_calldata_packet_bytes": (len(packet) - 2) // 2,
         },
-        "checks": {name: {"expected": want, "actual": got, "ok": got == want} for name, (want, got) in checks.items()},
+        "checks": {
+            name: {"expected": want, "actual": got, "ok": got == want}
+            for name, (want, got) in checks.items()
+        },
     }
-    results["checks"]["adapter verify transaction"] = {"expected": "success", "actual": "success" if verify_status else "reverted", "ok": verify_status}
 
     for name, check in results["checks"].items():
         print(f"{'ok  ' if check['ok'] else 'FAIL'} {name}: {check['actual']}")

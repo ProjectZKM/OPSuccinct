@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IZirenProofVerifier} from "./interfaces/IZirenProofVerifier.sol";
+import {IZirenProofVerifier} from "@ziren-shared/IZirenProofVerifier.sol";
 import {MetisAggregationOutputs} from "./lib/Types.sol";
 import {IChainStorageContainer, IMVMStateCommitmentChain} from "./metis/IMVMStateCommitmentChain.sol";
 import {Lib_OVMCodec} from "./metis/Lib_OVMCodec.sol";
