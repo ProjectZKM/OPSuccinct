@@ -138,24 +138,32 @@ cd contracts/ziren-groth16-verifier
 forge test --match-contract ZirenGroth16ProofVerifierTest
 ```
 
-These use a mock verifier. They check the packet length and selector, the digest mask,
-and the forwarding of the proof and the three public inputs. They do not check the
-Groth16 proof itself; section 2 does that.
+`ZirenGroth16ProofVerifierTest` uses a mock verifier. It checks the packet length and selector, the
+digest mask, and the forwarding of the proof and the three public inputs.
+
+`Groth16VerifierTest` runs the real `Groth16Verifier` (`src/Groth16Verifier.sol`) on the fixture proof
+in-process. It checks that the proof is accepted, that a changed proof word or public input is rejected,
+and that the adapter accepts the fixture packet when it calls the real verifier. This test does not
+replace section 2, which checks the deployed contracts on a node.
 
 ## 4. Measured values
 
-Measured on 2026-11-05 on a local Osaka Anvil node (`--gas-limit 60000000`), with the
-fibonacci proof (input 10) and the verifier and adapter built by `contracts/ziren-groth16-verifier/foundry.toml`
-(solc 0.8.30, optimizer on), using `scripts/groth16_verify.py`.
+Measured on 2026-11-05 on a local Osaka Anvil node (`--gas-limit 60000000`) on the box, with a
+freshly exported Groth16 proof for the fibonacci guest (input 10). The verifier and adapter were built
+by `contracts/ziren-groth16-verifier/foundry.toml` (solc 0.8.30, optimizer on), and `scripts/groth16_verify.py`
+ran all checks in section 2 with exit code 0.
 
 | Cost | Gas |
 | --- | --- |
-| Verification transaction | 233,498 |
-| of which calldata (260-byte packet) | 5,140 |
+| Verification transaction | 233,450 |
+| of which calldata (388-byte `verify` call, 260-byte packet) | 5,092 |
 | Execution (verification transaction minus 21,000 base and calldata) | 207,358 |
 | Deployment, Groth16Verifier | 1,135,523 |
 | Deployment, ZirenGroth16ProofVerifier | 326,771 |
 
+The calldata figure counts the full ABI-encoded `verify(bytes,bytes32)` call at 16 gas per non-zero
+byte and 4 per zero byte. The proof changes with each export, so calldata and execution gas vary a
+little between runs.
 
 ## Caveats
 
