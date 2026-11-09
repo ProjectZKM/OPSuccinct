@@ -126,6 +126,12 @@ The recursion root is the value the prover computes for the shrink (`recursion_v
 carried in the proof as `input[2]`. For the fibonacci run it is
 `0x007ad39482c4460fe91d19534ecc20e27d374c3e17c0fe5f44d7cf7cb0fd2349`.
 
+The deployed addresses are written to the `--report` file under `verifier` (`Groth16Verifier`)
+and `adapter` (`ZirenGroth16ProofVerifier`). Each is the `contractAddress` of its deployment
+receipt. The `gas` field records their deployment gas, and `checks` records the outcome of each
+check in section 2. Without `--report` the addresses are not saved, so pass the flag, and keep
+the file: the node's state is lost when it stops.
+
 The script computes the output digest from `--public-values`, the statement's `public_values.bin`.
 The digest is SHA-256 of the committed public-value bytes: the file stores them with an 8-byte
 little-endian length prefix, and the hash covers only the bytes after it. For the fibonacci

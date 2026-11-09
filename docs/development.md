@@ -82,6 +82,26 @@ profile, build and encoding with the
 geometry does not guarantee identical gas for every packet or guest build.
 `--skip-checkpoints` only skips optional intermediate-vector comparisons.
 
+The deployed addresses are recorded in two files:
+
+- `$WORK/build/deployments.json` (or the path given by `--deployments`): one entry per native
+  kernel, with `index`, `name` (the kernel name in the build manifest, also the `<name>.yul` source),
+  `address`, `gas` and `code_hash`. It is written as each kernel deploys, so a run
+  that stops partway still leaves the addresses it created. A later run reuses an entry when
+  code is still present at its address.
+- `--out` report (`$WORK/verification.json`), on success:
+  - `entry_address`: the entry contract, the address to call with
+    `verify(bytes proofPacket, bytes32 expectedOutputDigest)`;
+  - `whir_address`: the WHIR tail module;
+  - `closing_module_address`: the closing module, when the build has one;
+  - `transaction_hash`: the verification transaction.
+
+  The kernel table and the kernel addresses are stored inside the entry contract, so they do not
+  appear as separate fields. `kernel_count` gives the number of native kernels.
+
+Anvil's deployer addresses are deterministic for a fresh node, but the records are the reliable
+source: the node's state is lost when it stops. The report and records are not committed to the repository.
+
 ## Notes
 
 - **`--derived`** omits each sumcheck polynomial's linear coefficient and final

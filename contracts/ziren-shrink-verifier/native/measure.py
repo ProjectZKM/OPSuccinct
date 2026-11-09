@@ -95,9 +95,12 @@ def main():
         cached=deployed[i] if i<len(deployed) else None
         code=rpc('eth_getCode',[cached['address'],'latest']) if cached else '0x'
         if not cached or kh(bytes.fromhex(code[2:]))!=bytes.fromhex(k['code_hash'][2:]):
-            receipt=send(creation);cached={'address':receipt['contractAddress'],'gas':int(receipt['gasUsed'],16),'code_hash':k['code_hash']}
+            receipt=send(creation);cached={'index':i,'name':k['name'],'address':receipt['contractAddress'],'gas':int(receipt['gasUsed'],16),'code_hash':k['code_hash']}
             if i<len(deployed):deployed[i]=cached
             else:deployed.append(cached)
+            deployments.write_text(json.dumps(deployed,indent=2)+'\n')
+        elif cached.get('name')!=k['name'] or cached.get('index')!=i:
+            cached={**cached,'index':i,'name':k['name']};deployed[i]=cached
             deployments.write_text(json.dumps(deployed,indent=2)+'\n')
         addresses.append(cached['address']);deploy_gas+=cached['gas']
     print(f'deployed {len(addresses)} native kernels; total deployment gas {deploy_gas}',flush=True)
