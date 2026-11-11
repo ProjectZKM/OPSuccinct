@@ -2,8 +2,9 @@
 
 This proposal turns Metis into a validity-proven rollup bridge. Raw L2
 transactions are published in Ethereum blobs. L1 records each batch's blob
-versioned hash at commit and, once a Ziren proof is verified, the latest L2
-state root and the L2 withdrawal tree root. Deposits enter an L1 deposit tree
+versioned hash at commit and, once a Ziren proof is verified, an output root
+that commits to the latest L2 block hash, state root, withdrawal tree root and
+deposit-sync chain. Deposits enter an L1 deposit tree
 that L2 syncs and verifies before minting. The [cost model](#cost-model)
 compares this design with an assumed current publication cost, and
 [optimizations](#optimizations) ranks further savings.
@@ -43,9 +44,9 @@ sequenceDiagram
     S->>R: commitBatches, raw L2 transactions in blobs
     Note over R: chain BLOBHASH into the batch hash, fold in the parent block hash
     P->>P: read blobs, re-execute the range, prove
-    P->>R: finalize(proof, state root, withdrawal root)
+    P->>R: finalize(proof, block hash, state root, withdrawal root)
     R->>B1: read depositRootAt for every synced root
-    Note over R: verify proof, store both roots
+    Note over R: rebuild output root, verify proof, store it
     end
 
     rect rgba(127, 127, 127, 0.1)
@@ -56,21 +57,35 @@ sequenceDiagram
     end
 ```
 
-The state root and withdrawal root reach L1 only through a verified proof.
+The output root and its components reach L1 only through a verified proof.
 Deposit roots reach L2 through the L2 consensus layer, and finalization checks
 every synced root against L1.
 
 | Location | State |
 | --- | --- |
 | Ethereum blobs | Raw L2 transactions of each batch: the data availability |
-| L1 rollup contract | Chained batch hash at each commit boundary, with the L1 parent block hash folded in; per finalized batch, `finalizedStateRoots[i]` and `withdrawRoots[i]`; the last finalized deposit-sync chain |
+| L1 rollup contract | Chained batch hash at each commit boundary, with the L1 parent block hash folded in; per finalized batch, the output root and its components: block hash, state root (`finalizedStateRoots[i]`), withdrawal root (`withdrawRoots[i]`) and deposit-sync chain |
 | L1 bridge | Append-only deposit tree and its root after every deposit; escrow; relayed-withdrawal bitmap |
 | L2 bridge | Synced deposit roots, deposit-sync chain and claimed bitmap; append-only withdrawal tree |
 
-The state root is the `l2geth` execution state root of the last block in the
-finalized range. Per-block state roots are not published on L1: withdrawals
-prove against the withdrawal root, and the next proof starts from the stored
-state root.
+Finalization anchors L2 state with an output root:
+
+```text
+outputRoot = keccak256(abi.encode(version, stateRoot, withdrawRoot, depositSyncChain, blockHash))
+```
+
+`blockHash` and `stateRoot` are the hash and the `l2geth` execution state root
+of the last block in the finalized range, `withdrawRoot` and `depositSyncChain`
+are read from that state, and `version` is zero. This is the OP Stack output
+root with the deposit-sync chain added. A state root alone does not fix the
+block header that the next proof must continue from (its number, timestamp and
+parent hash); the block hash does. The proof's public values carry only the
+previous and new output roots. The contract rebuilds the new one from the
+block hash, state root and withdrawal root supplied by the caller and the
+deposit-sync chain it derives itself, so a wrong component fails verification,
+and it stores the output root together with those components. Per-block state
+roots are not published on L1: withdrawals prove against the withdrawal root,
+and the next proof starts from the stored output root.
 
 ## Batch commitment
 
@@ -134,8 +149,9 @@ followed by parent and L1-origin checks
 3. Anyone claims a deposit on L2 with its index and Merkle path against a
    synced root. The L2 bridge checks the path, marks the index claimed and
    mints the same amount.
-4. Finalization takes the synced counts as calldata and rebuilds the chain from
-   the L1 root history. The proof must export the L2 chain value, so every root
+4. Finalization takes the synced counts as calldata, rebuilds the chain from
+   the L1 root history and uses the result as a component of the new output
+   root. The guest computes the same component from L2 state, so every root
    L2 accepted is checked against L1, not only the latest. Checking only the
    latest would let a sequencer sync a false root, mint against it and then
    sync the true root before the range ends.
@@ -158,8 +174,9 @@ finalization.
 Every L2-to-L1 withdrawal appends
 `keccak256(abi.encode(l2ChainId, l2Bridge, index, l2Sender, l1Recipient,
 amount))` to a depth-32 append-only tree in the L2 bridge, whose root is kept in
-L2 state. The guest exports that root at the end of the proven range, and
-finalization stores it as `withdrawRoots[batchIndex]`.
+L2 state. The guest binds that root into the output root at the end of the
+proven range. The caller supplies it to finalization, which checks it through
+the output root and stores it as `withdrawRoots[batchIndex]`.
 
 The bridge carries only METIS, so neither leaf has a token field. Each leaf
 binds its source chain ID and bridge address, so a leaf cannot be replayed
@@ -178,10 +195,9 @@ The proof's public values bind:
 | Value | Source on L1 |
 | --- | --- |
 | L2 chain ID, program key | Rollup configuration |
-| Previous batch hash (with its anchor) and state root | Stored at the last finalized batch |
+| Previous batch hash (with its anchor) and output root | Stored at the last finalized batch |
 | Number of batches and new batch hash | Committed batch-hash chain, including each commit's L1 anchor |
-| New state root, withdrawal root | Caller; stored on success |
-| Previous and new deposit-sync chain | Stored chain, extended from `depositRootAt` |
+| New output root | Rebuilt by the contract from the caller's block hash, state root and withdrawal root and from the stored deposit-sync chain extended from `depositRootAt`; stored on success |
 
 The verifier checks the proof against the SHA-256 of these values. The guest
 must, in order:
@@ -196,13 +212,15 @@ must, in order:
    serves proofs after Fusaka. Reject non-canonical field elements, a
    duplicated or reordered hash and a short or trailing payload.
 3. Decode the blob, frames, channel and span batch, and reproduce Metis
-   derivation and `l2geth` execution exactly from the previous state root.
-   The derived ending block must equal the committed range.
+   derivation and `l2geth` execution exactly from the block and state that
+   the previous output root commits to. The derived ending block must equal
+   the committed range.
 4. Authenticate the L1 origin headers that the span batches reference by
    walking parent hashes back from the last anchor, and use only the fields
    (number, timestamp, basefee) of headers on that walk.
-5. Execute deposit syncs and claims as ordinary L2 transactions, and export the
-   final `depositSyncChain` and withdrawal root read from L2 state.
+5. Execute deposit syncs and claims as ordinary L2 transactions, read the
+   final `depositSyncChain` and withdrawal root from L2 state, and check that
+   they hash with the final state root and block hash to the new output root.
 
 Steps 2 and 3 derive the blob hash and the state root from the same bytes. The
 sequencer encodes a batch's raw transactions into blobs and executes the same
@@ -330,7 +348,9 @@ Metis-format blobs and finalizing with a no-op verifier:
 
 The L2 figures use Ethereum's gas schedule; Metis's own schedule must be checked.
 The prototype leaves still have a token field and no withdrawal domain fields;
-rerun these after adopting the leaf format above.
+rerun these after adopting the leaf format above. The prototype also predates
+the output root: storing it and the block hash adds at least two new storage
+slots, about 22,100 gas each, to every finalization.
 The [cost model](#cost-model) prices these.
 
 ## Cost model
@@ -606,8 +626,9 @@ verification.
 ## Migration and safety
 
 1. Activate at a batch boundary. Batches before it keep the existing SCC and
-   fraud-window rules; snapshot the accepted state and resolve pending disputes
-   before activation. Do not globally zero the fraud window.
+   fraud-window rules; snapshot the accepted state, initialize the first
+   output root from it and resolve pending disputes before activation. Do not
+   globally zero the fraud window.
 2. Every post-activation finalization requires a valid proof. Elapsed time
    never finalizes a batch.
 3. Proof-only finality halts withdrawals if no approved configuration can prove
@@ -672,7 +693,7 @@ its data availability and commitment differ.
 | Data availability | Transactions as L1 calldata, at most 120,000 bytes per batch; a validium variant uses a data committee. No blob path at this revision | Ethereum blobs |
 | Batch commitment | `accInputHash = keccak(prev, keccak(transactions), l1InfoRoot, maxSequenceTimestamp, l2Coinbase, forcedBlockHashL1)` per batch, stored per sequence | `keccak(version, index, parent, BLOBHASH(i))`, stored per commit |
 | Proof input | `sha256(sender, oldStateRoot, oldAccInputHash, initNumBatch, chainID, forkID, newStateRoot, newAccInputHash, newLocalExitRoot, finalNewBatch)`; FFLONK over BN254 | Ziren shrink over SHA-256 public values; no prover address |
-| Stored on verification | `batchNumToStateRoot[finalNewBatch]` and the latest local exit root, folded into a global exit root kept in a history map | `finalizedStateRoots[i]` and `withdrawRoots[i]` |
+| Stored on verification | `batchNumToStateRoot[finalNewBatch]` and the latest local exit root, folded into a global exit root kept in a history map | The output root and its components, including `finalizedStateRoots[i]` and `withdrawRoots[i]` |
 | Withdrawals | L2 bridge's depth-32 local exit tree; an L1 claim proves the leaf under the local exit root, that root under the rollup exit root, and that the global exit root exists | Depth-32 L2 tree; relay proves the leaf under `withdrawRoots[i]` |
 | Deposits | L1 bridge's depth-32 exit tree; each new global exit root becomes a leaf of the L1 info tree with `l1InfoRootMap[count]` | Depth-32 L1 tree with `depositRootAt[count]` |
 | Binding synced roots | `sequenceBatches` binds an existing L1 info root into the batch; each L2 block names a leaf index and the ROM verifies its Merkle path before writing the global exit root to L2 storage ([`process-change-l2-block.zkasm`](https://github.com/0xPolygonHermez/zkevm-rom/blob/d17ccaf9c920697571fad8224e3922571fbb3d59/main/process-change-l2-block.zkasm)) | Sync chain rebuilt from `depositRootAt` at finalization |
