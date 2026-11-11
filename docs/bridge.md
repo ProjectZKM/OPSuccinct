@@ -41,7 +41,7 @@ sequenceDiagram
     U->>B2: withdraw METIS
     Note over B2: append leaf to withdrawal tree
     S->>R: commitBatches, raw L2 transactions in blobs
-    Note over R: chain BLOBHASH into the batch hash
+    Note over R: chain BLOBHASH into the batch hash, fold in the parent block hash
     P->>P: read blobs, re-execute the range, prove
     P->>R: finalize(proof, state root, withdrawal root)
     R->>B1: read depositRootAt for every synced root
@@ -63,7 +63,7 @@ every synced root against L1.
 | Location | State |
 | --- | --- |
 | Ethereum blobs | Raw L2 transactions of each batch: the data availability |
-| L1 rollup contract | Chained batch hash at each commit boundary; per finalized batch, `finalizedStateRoots[i]` and `withdrawRoots[i]`; the last finalized deposit-sync chain |
+| L1 rollup contract | Chained batch hash at each commit boundary, with the L1 parent block hash folded in; per finalized batch, `finalizedStateRoots[i]` and `withdrawRoots[i]`; the last finalized deposit-sync chain |
 | L1 bridge | Append-only deposit tree and its root after every deposit; escrow; relayed-withdrawal bitmap |
 | L2 bridge | Synced deposit roots, deposit-sync chain and claimed bitmap; append-only withdrawal tree |
 
@@ -83,10 +83,23 @@ batchHash = keccak256(0x01 || uint64(batchIndex) || parentBatchHash || BLOBHASH(
 ```
 
 where `0x01` is the batch-format version byte, so a later format cannot produce
-the same hash as this one. The contract stores the last hash of each commit,
-keyed by its batch index; finalization therefore targets a commit boundary. The
-commit is accepted only if the parent equals the latest stored hash and the
-computed chain equals `lastBatchHash`. Reading
+the same hash as this one. The `0x02` below plays the same role for the anchor
+step, so a blob step cannot be passed off as one. The commit is accepted only if the parent equals the
+latest stored value and the computed chain equals `lastBatchHash`. The contract
+then folds the hash of the previous L1 block into the value it stores:
+
+```text
+stored = keccak256(0x02 || lastBatchHash || blockhash(block.number - 1))
+```
+
+keyed by the last batch index of the commit, and emits
+`BatchesCommitted(firstIndex, lastIndex, parentBatchHash, lastBatchHash, anchor, stored)`
+where `anchor` is that parent block hash. Finalization therefore targets a
+commit boundary, and the next commit's `parentBatchHash` is the previous stored
+value, so every commit is bound to the L1 block in which it landed. The
+sequencer does not predict the anchor: `lastBatchHash` is checked before the
+anchor is folded in. The guest uses the anchor to authenticate L1 origin
+headers; see "Migration and safety" item 4. Reading
 `BLOBHASH` in the transaction that carries the blob shows that Ethereum
 published that data; a hash supplied in calldata would not. One Osaka
 transaction can carry at most 6 blobs
@@ -165,8 +178,8 @@ The proof's public values bind:
 | Value | Source on L1 |
 | --- | --- |
 | L2 chain ID, program key | Rollup configuration |
-| Previous batch hash and state root | Stored at the last finalized batch |
-| Number of batches and new batch hash | Committed batch-hash chain |
+| Previous batch hash (with its anchor) and state root | Stored at the last finalized batch |
+| Number of batches and new batch hash | Committed batch-hash chain, including each commit's L1 anchor |
 | New state root, withdrawal root | Caller; stored on success |
 | Previous and new deposit-sync chain | Stored chain, extended from `depositRootAt` |
 
@@ -174,7 +187,9 @@ The verifier checks the proof against the SHA-256 of these values. The guest
 must, in order:
 
 1. Recompute the batch-hash chain from the previous batch hash and each blob's
-   versioned hash, and check it against the committed hash.
+   versioned hash, folding in each commit's anchor after that commit's last
+   blob, and check it against the committed hash. The anchors must be used up
+   exactly at the end of the range, which therefore ends on a commit boundary.
 2. Authenticate each blob: check `0x01 || sha256(commitment)[1:]` equals the
    versioned hash, then verify the blob's KZG proof. The host computes the
    commitment and proof with c-kzg, because the beacon blob API no longer
@@ -183,7 +198,10 @@ must, in order:
 3. Decode the blob, frames, channel and span batch, and reproduce Metis
    derivation and `l2geth` execution exactly from the previous state root.
    The derived ending block must equal the committed range.
-4. Execute deposit syncs and claims as ordinary L2 transactions, and export the
+4. Authenticate the L1 origin headers that the span batches reference by
+   walking parent hashes back from the last anchor, and use only the fields
+   (number, timestamp, basefee) of headers on that walk.
+5. Execute deposit syncs and claims as ordinary L2 transactions, and export the
    final `depositSyncChain` and withdrawal root read from L2 state.
 
 Steps 2 and 3 derive the blob hash and the state root from the same bytes. The
@@ -481,7 +499,7 @@ implemented savings.
 | First | Compare native shrink with Ziren Groth16/PLONK terminals | Reduce the dominant 13.7M-gas verification | Same Metis workload, full transaction, wrapping compute, setup assessment |
 | Next | Profile guest and native verifier; transport | Lower proving cost and per-finalization gas | Representative profiles, correctness and gas comparisons |
 | Next | Tune commit tips; pack several batches per commit | Reduce publication cost | Inclusion-latency experiment and latency target |
-| Later | Share withdrawal paths; avoid checkpoints | Reduce relay and anchor overhead | Relay demand and full-path measurements |
+| Later | Share withdrawal paths | Reduce relay overhead | Relay demand and full-path measurements |
 
 None of these allows proof-free finality. A pairing-based terminal changes
 cryptographic and setup assumptions.
@@ -563,11 +581,13 @@ withdrawal-latency target first.
 
 Relays against the same withdrawal root could share Merkle nodes in a bounded
 multiproof, preserving per-withdrawal identity, recipient and replay
-protection; measure relay demand first. The guest's L1-origin anchor can use
-`BLOCKHASH` for recent blocks or
-[EIP-2935](https://eips.ethereum.org/EIPS/eip-2935) history within 8,191
-blocks where verified, with a checkpoint fallback for older anchors. These
-save small overheads, not the dominant verification.
+protection; measure relay demand first. The L1-origin anchor is already
+folded into each commit at no extra transaction or storage cost, so no
+`BLOCKHASH`, [EIP-2935](https://eips.ethereum.org/EIPS/eip-2935) or
+checkpoint path is needed on L1; the remaining cost is the guest's
+parent-hash walk from the anchor to the oldest origin block, which grows with
+how far finalization lags. These save small overheads, not the dominant
+verification.
 
 ### Measurement gates
 
@@ -594,9 +614,13 @@ save small overheads, not the dominant verification.
    the chain. Governance approves a replacement guest and verifier that
    continues from the finalized state, behind a timelock and public notice.
 4. Span batches still reference L1 origin blocks, so the guest authenticates
-   those headers against an anchor that is a recent `blockhash` or a
-   checkpointed hash. Deposits and DA no longer need it: they are bound by the
-   sync chain and `BLOBHASH`.
+   those headers by walking parent hashes back from the anchor recorded at
+   commit time, the hash of the L1 block preceding the commit transaction.
+   Every origin block a batch references precedes its commit, so it lies on
+   that anchor's ancestor chain, and the anchor is bound to the stored commit
+   value the proof must match. No separate `blockhash` read or checkpoint
+   transaction is needed. Deposits and DA do not need it either: they are
+   bound by the sync chain and `BLOBHASH`.
 5. Hash-based proof verification does not make blob KZG, signatures,
    consensus or governance post-quantum safe.
 
